@@ -11,7 +11,7 @@
 * **Global Hotkey Picker:** Press `Cmd + Option + Shift + V` anywhere on macOS to bring up a floating paste panel right at your cursor position.
 * **Rich Content Support:**
   * **Images:** Preview captured screenshots and image clips directly in the picker.
-  * **Hex Colors:** Automatic color swatch previews for hex values (e.g., `#1E293B`).
+  * **Hex Colors:** Automatic color swatch previews for hex values (e.g., `#676767`, `#FF007F`).
   * **URLs:** Automatically fetches and displays web page titles.
   * **Rich Text:** Retains formatting (RTF/HTML) across applications.
 * **Smart Privacy & Auto-Delete:**
