@@ -38,3 +38,17 @@ Install the required dependencies using `pip`:
 
 ```bash
 pip install rumps pyobjc-framework-AppKit pyobjc-framework-Quartz quickmachotkey
+```
+### 🛡️ Privacy & Security PasteDeck was built with privacy in mind:
+
+**Local Storage:**
+All local clipboard history (except pinned/regular items) is kept strictly on your local machine under ~/.multi-clipboard.json.
+
+**Sensitive Data Handling:** 
+Sensitive items (passwords, tokens, credentials) are flagged with 🔒, kept only in **RAM**, and cleared automatically after 45 seconds.
+
+**Zero Telemetry:** 
+No network connection or tracking telemetry is included.
+
+**📄 License:**
+Distributed under the **MIT** License. See **LICENSE** for more information.
