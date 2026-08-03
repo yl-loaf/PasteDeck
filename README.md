@@ -37,7 +37,8 @@
 Install the required dependencies using `pip`:
 
 ```bash
-pip install rumps pyobjc-framework-AppKit pyobjc-framework-Quartz quickmachotkey
+chmod +x install_pastedeck.sh
+./install_pastedeck.sh
 ```
 ### 🛡️ Privacy & Security PasteDeck was built with privacy in mind:
 
