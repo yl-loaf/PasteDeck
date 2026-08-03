@@ -34,7 +34,11 @@
 * **Python:** 3.9+
 
 ### Dependencies
-Go into the path of the folder and run this ```.sh``` code:
+Navigate into the path of the folder:
+```bash
+cd ~/path/to/PasteDeck
+```
+And run this ```.sh``` code:
 
 ```bash
 chmod +x install_pastedeck.sh
