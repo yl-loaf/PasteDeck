@@ -1,2 +1,40 @@
-# PasteDeck
-PasteDeck is a fast, privacy-focused macOS multi-clipboard app. Press Cmd+Opt+Shift+V to open a 9-slot floating picker for text, images, URLs, and hex colors. Features hotkey pasting, slot pinning, and auto-deletion for sensitive passwords.
+# 📋 PasteDeck
+
+> A lightweight, privacy-focused multi-clipboard manager for macOS.
+
+**PasteDeck** expands your macOS clipboard into a 9-slot power tool that runs directly from your menu bar. Built with Python and native AppKit APIs, it captures text, rich formatting, images, URLs, and hex colors—giving you instant hotkey access to past copies.
+
+---
+
+## ✨ Key Features
+
+* **Global Hotkey Picker:** Press `Cmd + Option + Shift + V` anywhere on macOS to bring up a floating paste panel right at your cursor position.
+* **Rich Content Support:**
+  * **Images:** Preview captured screenshots and image clips directly in the picker.
+  * **Hex Colors:** Automatic color swatch previews for hex values (e.g., `#1E293B`).
+  * **URLs:** Automatically fetches and displays web page titles.
+  * **Rich Text:** Retains formatting (RTF/HTML) across applications.
+* **Smart Privacy & Auto-Delete:**
+  * Automatically detects copies coming from password managers (1Password, Bitwarden, LastPass, Keychain, etc.) and high-entropy secret patterns.
+  * Sensitive items are encrypted in memory, **never written to disk**, and automatically deleted after 45 seconds.
+* **Slot Pinning:** Lock your frequently used snippets or boilerplate text to fixed slots so they never roll off your history stack.
+* **⌨️ Fast Keyboard Control:**
+  * `1`–`9` to paste a slot.
+  * `Option + Slot` to toggle pin/unpin.
+  * `Cmd + Slot` to delete a specific slot.
+  * `0` to clear all unpinned items.
+  * `Esc` to close.
+
+---
+
+## Installation & Setup
+
+### Prerequisites
+* **macOS:** 10.15 (Catalina) or newer.
+* **Python:** 3.9+
+
+### Dependencies
+Install the required dependencies using `pip`:
+
+```bash
+pip install rumps pyobjc-framework-AppKit pyobjc-framework-Quartz quickmachotkey
