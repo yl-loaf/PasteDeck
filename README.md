@@ -34,7 +34,7 @@
 * **Python:** 3.9+
 
 ### Dependencies
-Install the required dependencies using `pip`:
+Go into the path of the folder and run this ```.sh``` code:
 
 ```bash
 chmod +x install_pastedeck.sh
