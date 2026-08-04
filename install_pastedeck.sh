@@ -26,28 +26,22 @@ fi
 echo "📦 Installing PasteDeck dependencies..."
 echo ""
 
-# Order matters: pyobjc-core first (provides the 'objc' module)
-DEPENDENCIES=(
-    "pyobjc-core>=10.0"
-    "pyobjc-framework-Cocoa>=10.0"
-    "pyobjc-framework-Quartz>=10.0"
-    "rumps>=0.4.0"
-    "quickmachotkey"
-)
-
-for dep in "${DEPENDENCIES[@]}"; do
-    echo "   Installing: $dep"
-    # --user avoids permission errors on system Python; works on most Macs
-    python3 -m pip install --user "$dep" || python3 -m pip install "$dep"
-done
+# Single install command (matches the manual fix)
+# pyobjc-core provides the 'objc' module
+python3 -m pip install --user \
+    pyobjc-core \
+    pyobjc-framework-Cocoa \
+    pyobjc-framework-Quartz \
+    rumps \
+    quickmachotkey
 
 echo ""
 echo "🔍 Verifying critical imports..."
 if python3 -c "import objc; import AppKit; import Quartz; import rumps; from quickmachotkey import quickHotKey; print('✅ All imports OK')" 2>/dev/null; then
     echo "✅ All modules import successfully"
 else
-    echo "⚠️  Some modules failed to import. Try running these manually:"
-    echo "   python3 -m pip install --user --force-reinstall pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz"
+    echo "⚠️  Some modules failed to import. Try this manually:"
+    echo "   python3 -m pip install --user --force-reinstall pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz rumps quickmachotkey"
 fi
 
 echo ""
