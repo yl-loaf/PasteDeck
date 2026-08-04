@@ -44,6 +44,11 @@ And run this ```.sh``` code:
 chmod +x install_pastedeck.sh
 ./install_pastedeck.sh
 ```
+if this doesnt work, run this instead:
+```bash
+sh <path_to_file>
+```
+replace <path to file> by typing `sh `, with a space after sh and dragging and dropping the file into terminal.
 ### 🛡️ Privacy & Security PasteDeck was built with privacy in mind:
 
 **Local Storage:**
