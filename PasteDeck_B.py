@@ -42,6 +42,10 @@ from AppKit import (
     NSTrackingActiveAlways,
     NSTrackingInVisibleRect,
     NSTrackingMouseEnteredAndExited,
+    NSVisualEffectView,
+    NSVisualEffectMaterialHUDWindow,
+    NSVisualEffectBlendingModeBehindWindow,
+    NSVisualEffectStateActive,
     NSView,
     NSWindowStyleMaskBorderless,
     NSWorkspace,
@@ -1127,15 +1131,18 @@ class ClipboardPickerPanel(NSPanel):
         self.makeKeyAndOrderFront_(None)
 
     def _build_content(self):
-        content = NSView.alloc().initWithFrame_(
+        # Native macOS vibrancy / acrylic blur (Spotlight / Raycast style)
+        content = NSVisualEffectView.alloc().initWithFrame_(
             NSMakeRect(0, 0, PANEL_WIDTH, PANEL_HEIGHT)
         )
+        content.setMaterial_(NSVisualEffectMaterialHUDWindow)
+        content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
+        content.setState_(NSVisualEffectStateActive)
         content.setWantsLayer_(True)
-        content.layer().setBackgroundColor_(
-            NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.11, 0.12, 0.14, 0.96
-            ).CGColor()
-        )
+        content.layer().setCornerRadius_(12.0)
+        content.layer().setMasksToBounds_(True)
+
+        
         content.layer().setCornerRadius_(12.0)
 
         title = NSTextField.alloc().initWithFrame_(
