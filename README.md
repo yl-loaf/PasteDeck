@@ -8,7 +8,7 @@
 
 ## ✨ Key Features
 
-* **Global Hotkey Picker:** Press `Cmd + Option + Shift + V` anywhere on macOS to bring up a floating paste panel right at your cursor position.
+* **Global Hotkey Picker:** Press ⌥⇧⌘V anywhere on macOS to bring up a floating paste panel right at your cursor position.
 * **Rich Content Support:**
   * **Images:** Preview captured screenshots and image clips directly in the picker.
   * **Hex Colors:** Automatic color swatch previews for hex values (e.g., `#676767`, `#FF007F`).
@@ -20,8 +20,8 @@
 * **Slot Pinning:** Lock your frequently used snippets or boilerplate text to fixed slots so they never roll off your history stack.
 * **⌨️ Fast Keyboard Control:**
   * `1`–`9` to paste a slot.
-  * `Option + Slot` to toggle pin/unpin.
-  * `Cmd + Slot` to delete a specific slot.
+  * `⌥ + Slot` to toggle pin/unpin.
+  * `⌘ + Slot` to delete a specific slot.
   * `0` to clear all unpinned items.
   * `Esc` to close.
 
