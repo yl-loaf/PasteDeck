@@ -20,6 +20,7 @@ from urllib.parse import urlparse
 import objc
 import rumps
 from AppKit import (
+    NSAppearance,
     NSApplication,
     NSBackingStoreBuffered,
     NSBitmapImageRep,
@@ -795,6 +796,8 @@ class QuickLookPreviewPanel(NSPanel):
         content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
         content.setState_(NSVisualEffectStateActive)
         content.setWantsLayer_(True)
+        # Keep HUD dark so the light text stays readable in system light mode
+        content.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
 
         try:
             from AppKit import NSBezierPath, NSEdgeInsetsMake, NSImageResizingModeStretch
@@ -1441,7 +1444,7 @@ class ClipboardPickerPanel(NSPanel):
         # NSTimer fires on the main run-loop (AppKit-safe)
         from Foundation import NSTimer
         self._ql_hide_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            0.5, self, "hideQuickLookIfIdle:", None, False
+            0.18, self, "hideQuickLookIfIdle:", None, False
         )
 
     def _cancel_hide_quicklook(self):
@@ -1494,6 +1497,8 @@ class ClipboardPickerPanel(NSPanel):
         content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
         content.setState_(NSVisualEffectStateActive)
         content.setWantsLayer_(True)
+        # Keep HUD dark so light text stays readable in system light mode
+        content.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
 
         radius = 12.0
         # Prefer maskImage for clean rounded corners (no black rim).
