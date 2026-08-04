@@ -4,6 +4,21 @@ echo "🚀 PasteDeck Dependency Installer"
 echo "=================================="
 echo ""
 
+# --- Ensure latest Python (via Homebrew if available) ---
+if command -v brew &> /dev/null; then
+    echo "🍺 Homebrew detected — upgrading Python to the latest version..."
+    brew update
+    brew install python || brew upgrade python
+    # Prefer the Homebrew python3 on PATH
+    export PATH="$(brew --prefix)/bin:$PATH"
+    echo "✅ Homebrew Python ready"
+    echo ""
+else
+    echo "ℹ️  Homebrew not found. Using system python3."
+    echo "   (To get the absolute latest Python: install Homebrew then re-run this script)"
+    echo ""
+fi
+
 # Check Python
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 is not installed. Please install Python 3.9+ first."
@@ -23,12 +38,17 @@ if ! python3 -m pip --version &> /dev/null; then
     exit 1
 fi
 
-echo "📦 Installing PasteDeck dependencies..."
+# Force-upgrade pip itself to the latest
+echo "⬆️  Upgrading pip to the latest version..."
+python3 -m pip install --user --upgrade --force-reinstall pip
 echo ""
 
-# Single install command (matches the manual fix)
+echo "📦 Installing PasteDeck dependencies (latest versions, forced)..."
+echo ""
+
+# Force latest versions of every module
 # pyobjc-core provides the 'objc' module
-python3 -m pip install --user \
+python3 -m pip install --user --upgrade --force-reinstall \
     pyobjc-core \
     pyobjc-framework-Cocoa \
     pyobjc-framework-Quartz \
@@ -41,7 +61,7 @@ if python3 -c "import objc; import AppKit; import Quartz; import rumps; from qui
     echo "✅ All modules import successfully"
 else
     echo "⚠️  Some modules failed to import. Try this manually:"
-    echo "   python3 -m pip install --user --force-reinstall pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz rumps quickmachotkey"
+    echo "   python3 -m pip install --user --upgrade --force-reinstall pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz rumps quickmachotkey"
 fi
 
 echo ""

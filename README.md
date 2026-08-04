@@ -31,7 +31,7 @@
 
 ### Prerequisites
 * **macOS:** 10.15 (Catalina) or newer.
-* **Python:** 3.9+
+* **Python:** 3.10+
 
 ### Dependencies
 Navigate into the path of the folder:
