@@ -1441,7 +1441,7 @@ class ClipboardPickerPanel(NSPanel):
         # NSTimer fires on the main run-loop (AppKit-safe)
         from Foundation import NSTimer
         self._ql_hide_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
-            0.18, self, "hideQuickLookIfIdle:", None, False
+            0.5, self, "hideQuickLookIfIdle:", None, False
         )
 
     def _cancel_hide_quicklook(self):
