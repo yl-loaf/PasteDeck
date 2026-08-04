@@ -28,12 +28,12 @@ fi
 echo "📦 Installing PasteDeck dependencies..."
 echo ""
 
-# Install dependencies from requirements
+# Install dependencies matching PasteDeck.py imports
 DEPENDENCIES=(
     "rumps>=0.4.0"
-    "pynput>=1.7.6"
     "pyobjc-framework-Cocoa>=10.0"
     "pyobjc-framework-Quartz>=10.0"
+    "quickmachotkey"
 )
 
 for dep in "${DEPENDENCIES[@]}"; do
