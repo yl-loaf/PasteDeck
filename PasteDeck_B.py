@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Multi-clipboard manager for macOS – rich text, visual previews, pinned clips, privacy controls.
+"""Multi-clipboard manager for macOS – rich text, visual previews, pinned clips,
+   privacy controls, and Instant In-Line Quick Look (hover a slot to peek).
    (Network sync removed)
 """
 
@@ -28,6 +29,7 @@ from AppKit import (
     NSImage,
     NSImageView,
     NSMakeRect,
+    NSMakeSize,
     NSPanel,
     NSPasteboard,
     NSPasteboardTypeHTML,
@@ -37,7 +39,9 @@ from AppKit import (
     NSPasteboardTypeTIFF,
     NSRunningApplication,
     NSScreen,
+    NSScrollView,
     NSTextField,
+    NSTextView,
     NSTrackingArea,
     NSTrackingActiveAlways,
     NSTrackingInVisibleRect,
@@ -82,6 +86,13 @@ KEY_DOWN_MASK = 1 << 10
 MOUSE_DOWN_MASK = (1 << 1) | (1 << 3) | (1 << 25)
 ESCAPE_KEYCODE = 53
 SENSITIVE_EXPIRE_SECONDS = 45
+
+# Quick Look floating preview
+QL_MAX_WIDTH = 520
+QL_MAX_HEIGHT = 420
+QL_MIN_WIDTH = 280
+QL_PADDING = 14
+QL_IMAGE_MAX = 480
 
 _active_panel = None
 _previous_app = None
@@ -710,6 +721,268 @@ class ClipboardStore:
 # ---------------------------------------------------------------------------
 # UI
 # ---------------------------------------------------------------------------
+class QuickLookHoverView(NSVisualEffectView):
+    """Vibrancy content view that reports mouse enter/exit so the preview stays open."""
+
+    def initWithFrame_onHover_(self, frame, on_hover):
+        self = objc.super(QuickLookHoverView, self).initWithFrame_(frame)
+        if self is None:
+            return None
+        self.on_hover = on_hover
+        tracking = NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
+            self.bounds(),
+            NSTrackingMouseEnteredAndExited
+            | NSTrackingActiveAlways
+            | NSTrackingInVisibleRect,
+            self,
+            None,
+        )
+        self.addTrackingArea_(tracking)
+        return self
+
+    def mouseEntered_(self, event):
+        if self.on_hover:
+            self.on_hover(True)
+
+    def mouseExited_(self, event):
+        if self.on_hover:
+            self.on_hover(False)
+
+
+class QuickLookPreviewPanel(NSPanel):
+    """Temporary floating preview – macOS Quick Look style, shown on hover."""
+
+    def init(self):
+        self = objc.super(QuickLookPreviewPanel, self).initWithContentRect_styleMask_backing_defer_(
+            NSMakeRect(0, 0, QL_MIN_WIDTH, 120),
+            NSWindowStyleMaskBorderless,
+            NSBackingStoreBuffered,
+            False,
+        )
+        if self is None:
+            return None
+        self.setLevel_(26)  # above the picker panel
+        self.setOpaque_(False)
+        self.setBackgroundColor_(NSColor.clearColor())
+        self.setHasShadow_(True)
+        self.setHidesOnDeactivate_(False)
+        self.setCanHide_(False)
+        self.setCollectionBehavior_(128 | 256)
+        self._slot = None
+        self._picker = None
+        self._over_preview = False
+        return self
+
+    def showForSlot_nearPanel_(self, slot_data, picker_panel):
+        """Build content for slot_data and position next to the picker.
+        Selector: showForSlot:nearPanel:  (2 args after self).
+        """
+        self._slot = slot_data.get("slot")
+        self._picker = picker_panel
+        self._over_preview = False
+        kind = slot_data.get("kind", "text")
+        text = slot_data.get("text") or ""
+        sensitive = slot_data.get("sensitive", False)
+        image_hash = slot_data.get("image_hash")
+
+        radius = 10.0
+        # Content container with vibrancy + clean rounded mask (no black rim)
+        content = QuickLookHoverView.alloc().initWithFrame_onHover_(
+            NSMakeRect(0, 0, QL_MIN_WIDTH, 120),
+            self._on_preview_hover,
+        )
+        content.setMaterial_(NSVisualEffectMaterialHUDWindow)
+        content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
+        content.setState_(NSVisualEffectStateActive)
+        content.setWantsLayer_(True)
+
+        try:
+            from AppKit import NSBezierPath, NSEdgeInsetsMake, NSImageResizingModeStretch
+            mask = NSImage.alloc().initWithSize_((radius * 2, radius * 2))
+            mask.lockFocus()
+            NSColor.blackColor().set()
+            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                NSMakeRect(0, 0, radius * 2, radius * 2), radius, radius
+            )
+            path.fill()
+            mask.unlockFocus()
+            mask.setCapInsets_(NSEdgeInsetsMake(radius, radius, radius, radius))
+            mask.setResizingMode_(NSImageResizingModeStretch)
+            content.setMaskImage_(mask)
+        except Exception:
+            pass
+
+        layer = content.layer()
+        if layer is not None:
+            layer.setCornerRadius_(radius)
+            layer.setMasksToBounds_(True)
+            layer.setBorderWidth_(0.0)
+            layer.setBorderColor_(NSColor.clearColor().CGColor())
+
+        width = QL_MIN_WIDTH
+        height = 80
+
+        if sensitive:
+            label = NSTextField.alloc().initWithFrame_(
+                NSMakeRect(QL_PADDING, QL_PADDING, QL_MIN_WIDTH - 2 * QL_PADDING, 40)
+            )
+            label.setStringValue_("🔒 Sensitive – preview hidden")
+            label.setBezeled_(False)
+            label.setDrawsBackground_(False)
+            label.setEditable_(False)
+            label.setSelectable_(False)
+            label.setFont_(NSFont.systemFontOfSize_(13))
+            label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.85, 1.0))
+            content.addSubview_(label)
+            width, height = QL_MIN_WIDTH, 60
+
+        elif kind == "image" and image_hash:
+            path = CACHE_DIR / f"{image_hash}.png"
+            if path.exists():
+                img = png_bytes_to_image(path.read_bytes())
+                if img:
+                    sz = img.size()
+                    iw, ih = float(sz.width), float(sz.height)
+                    scale = min(QL_IMAGE_MAX / max(iw, 1), QL_IMAGE_MAX / max(ih, 1), 1.0)
+                    disp_w = max(80, int(iw * scale))
+                    disp_h = max(80, int(ih * scale))
+                    iv = NSImageView.alloc().initWithFrame_(
+                        NSMakeRect(QL_PADDING, QL_PADDING, disp_w, disp_h)
+                    )
+                    iv.setImage_(img)
+                    iv.setImageScaling_(3)  # NSImageScaleProportionallyUpOrDown
+                    iv.setWantsLayer_(True)
+                    iv.layer().setCornerRadius_(6.0)
+                    iv.layer().setMasksToBounds_(True)
+                    content.addSubview_(iv)
+                    width = disp_w + 2 * QL_PADDING
+                    height = disp_h + 2 * QL_PADDING
+                else:
+                    width, height = self._add_text_preview(content, "[Image unavailable]")
+            else:
+                width, height = self._add_text_preview(content, "[Image not in cache]")
+
+        elif kind == "color" and slot_data.get("color"):
+            r, g, b, a = slot_data["color"]
+            swatch_size = 120
+            swatch = NSView.alloc().initWithFrame_(
+                NSMakeRect(QL_PADDING, QL_PADDING + 28, swatch_size, swatch_size)
+            )
+            swatch.setWantsLayer_(True)
+            swatch.layer().setBackgroundColor_(
+                NSColor.colorWithCalibratedRed_green_blue_alpha_(r, g, b, a).CGColor()
+            )
+            swatch.layer().setCornerRadius_(8.0)
+            swatch.layer().setBorderWidth_(1.0)
+            swatch.layer().setBorderColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(0.4, 1.0).CGColor()
+            )
+            content.addSubview_(swatch)
+            hex_label = NSTextField.alloc().initWithFrame_(
+                NSMakeRect(QL_PADDING, QL_PADDING, swatch_size + 40, 22)
+            )
+            hex_label.setStringValue_(text or f"#{int(r*255):02X}{int(g*255):02X}{int(b*255):02X}")
+            hex_label.setBezeled_(False)
+            hex_label.setDrawsBackground_(False)
+            hex_label.setEditable_(False)
+            hex_label.setSelectable_(False)
+            hex_label.setFont_(NSFont.monospacedSystemFontOfSize_weight_(13, 0.4))
+            hex_label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.9, 1.0))
+            content.addSubview_(hex_label)
+            width = swatch_size + 2 * QL_PADDING
+            height = swatch_size + 28 + 2 * QL_PADDING
+
+        else:
+            # Long text / JSON / URL – readable expanded popup
+            display = text
+            if not display and kind != "image":
+                display = "(empty)"
+            # Pretty-print JSON when possible
+            stripped = display.strip()
+            if (stripped.startswith("{") and stripped.endswith("}")) or (
+                stripped.startswith("[") and stripped.endswith("]")
+            ):
+                try:
+                    display = json.dumps(json.loads(stripped), indent=2, ensure_ascii=False)
+                except Exception:
+                    pass
+            width, height = self._add_text_preview(content, display)
+
+        content.setFrame_(NSMakeRect(0, 0, width, height))
+        self.setContentView_(content)
+        self.setContentSize_(NSMakeSize(width, height))
+
+        # Position to the right of the picker (or left if no room)
+        pf = picker_panel.frame()
+        screen = NSScreen.mainScreen().visibleFrame()
+        ql_x = pf.origin.x + pf.size.width + 10
+        if ql_x + width > screen.origin.x + screen.size.width - 8:
+            ql_x = pf.origin.x - width - 10
+        ql_y = pf.origin.y + pf.size.height - height
+        # Keep on screen vertically
+        if ql_y < screen.origin.y + 8:
+            ql_y = screen.origin.y + 8
+        if ql_y + height > screen.origin.y + screen.size.height - 8:
+            ql_y = screen.origin.y + screen.size.height - height - 8
+        self.setFrameOrigin_((ql_x, ql_y))
+        self.orderFrontRegardless()
+
+    def _on_preview_hover(self, entered):
+        self._over_preview = bool(entered)
+        if self._picker is not None:
+            self._picker.on_quicklook_hover(entered)
+
+    def is_mouse_over(self) -> bool:
+        return bool(self._over_preview)
+
+    def _add_text_preview(self, content, text: str):
+        """Add a scrollable text view; return (width, height)."""
+        # Cap display length for sanity
+        max_chars = 12000
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n… (truncated)"
+
+        # Estimate size
+        lines = text.count("\n") + 1
+        # Prefer wider for long lines
+        longest = max((len(ln) for ln in text.splitlines()), default=20)
+        est_w = min(QL_MAX_WIDTH, max(QL_MIN_WIDTH, min(longest * 7 + 2 * QL_PADDING, QL_MAX_WIDTH)))
+        est_h = min(QL_MAX_HEIGHT, max(100, min(lines * 18 + 2 * QL_PADDING, QL_MAX_HEIGHT)))
+
+        scroll = NSScrollView.alloc().initWithFrame_(
+            NSMakeRect(QL_PADDING, QL_PADDING, est_w - 2 * QL_PADDING, est_h - 2 * QL_PADDING)
+        )
+        scroll.setHasVerticalScroller_(True)
+        scroll.setHasHorizontalScroller_(False)
+        scroll.setAutohidesScrollers_(True)
+        scroll.setBorderType_(0)  # no border
+        scroll.setDrawsBackground_(False)
+
+        tv = NSTextView.alloc().initWithFrame_(scroll.contentView().bounds())
+        tv.setString_(text)
+        tv.setEditable_(False)
+        tv.setSelectable_(True)
+        tv.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0.3)
+                    if text.lstrip().startswith(("{", "["))
+                    else NSFont.systemFontOfSize_(13))
+        tv.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.92, 1.0))
+        tv.setBackgroundColor_(NSColor.clearColor())
+        tv.setDrawsBackground_(False)
+        tv.setVerticallyResizable_(True)
+        tv.setHorizontallyResizable_(False)
+        tv.textContainer().setWidthTracksTextView_(True)
+        tv.setMaxSize_(NSMakeSize(est_w - 2 * QL_PADDING, 1e7))
+        scroll.setDocumentView_(tv)
+        content.addSubview_(scroll)
+        return est_w, est_h
+
+    def hide_preview(self):
+        self._over_preview = False
+        self.orderOut_(None)
+        self._slot = None
+        self._picker = None
+
+
 class PickerEventMonitor:
     def __init__(self, panel, on_slot, on_cancel, on_toggle_pin, on_delete) -> None:
         self.panel = panel
@@ -750,20 +1023,24 @@ class PickerEventMonitor:
         self._global_key = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
             KEY_DOWN_MASK, lambda e: handle_key(e, False)
         )
+        def _point_in_frame(pt, frame):
+            return (
+                frame.origin.x <= pt.x <= frame.origin.x + frame.size.width
+                and frame.origin.y <= pt.y <= frame.origin.y + frame.size.height
+            )
+
+        def handle_mouse(e):
+            pt = NSEvent.mouseLocation()
+            if _point_in_frame(pt, self.panel.frame()):
+                return None
+            ql = getattr(self.panel, "_quicklook", None)
+            if ql is not None and ql.isVisible() and _point_in_frame(pt, ql.frame()):
+                return None
+            self.on_cancel()
+            return None
+
         self._global_mouse = NSEvent.addGlobalMonitorForEventsMatchingMask_handler_(
-            MOUSE_DOWN_MASK,
-            lambda e: (
-                self.on_cancel()
-                if not (
-                    self.panel.frame().origin.x
-                    <= NSEvent.mouseLocation().x
-                    <= self.panel.frame().origin.x + self.panel.frame().size.width
-                    and self.panel.frame().origin.y
-                    <= NSEvent.mouseLocation().y
-                    <= self.panel.frame().origin.y + self.panel.frame().size.height
-                )
-                else None
-            ),
+            MOUSE_DOWN_MASK, handle_mouse
         )
 
     def stop(self) -> None:
@@ -814,14 +1091,15 @@ class CloseButtonView(NSView):
 
 
 class SlotRowView(NSView):
-    def initWithFrame_slotData_onSelect_onTogglePin_onDelete_(
-        self, frame, slot_data, on_select, on_toggle_pin, on_delete
+    def initWithFrame_slotData_onSelect_onTogglePin_onDelete_onHover_(
+        self, frame, slot_data, on_select, on_toggle_pin, on_delete, on_hover
     ):
         self = objc.super(SlotRowView, self).initWithFrame_(frame)
         if self is None:
             return None
 
         self.slot = slot_data["slot"]
+        self.slot_data = slot_data
         self.full_text = slot_data.get("text", "")
         self.pinned = slot_data.get("pinned", False)
         self.kind = slot_data.get("kind", "text")
@@ -830,6 +1108,7 @@ class SlotRowView(NSView):
         self.on_select = on_select
         self.on_toggle_pin = on_toggle_pin
         self.on_delete = on_delete
+        self.on_hover = on_hover
         self.image_hash = slot_data.get("image_hash")
 
         if self.sensitive:
@@ -1017,9 +1296,13 @@ class SlotRowView(NSView):
 
     def mouseEntered_(self, event):
         self.layer().setBackgroundColor_(self._hover_color.CGColor())
+        if self.on_hover:
+            self.on_hover(self.slot, self.slot_data, True)
 
     def mouseExited_(self, event):
         self.layer().setBackgroundColor_(self._normal_color.CGColor())
+        if self.on_hover:
+            self.on_hover(self.slot, self.slot_data, False)
 
     def mouseDown_(self, event):
         loc = self.convertPoint_fromView_(event.locationInWindow(), None)
@@ -1049,6 +1332,9 @@ class ClipboardPickerPanel(NSPanel):
         self.store = store
         self._monitor = None
         self._closed = False
+        self._hovered_slot = None
+        self._hovered_data = None
+        self._quicklook = None
         self.setLevel_(25)
         self.setOpaque_(False)
         self.setBackgroundColor_(NSColor.clearColor())
@@ -1110,6 +1396,8 @@ class ClipboardPickerPanel(NSPanel):
         if self._closed:
             return
         self._closed = True
+        self._cancel_hide_quicklook()
+        self._hide_quicklook()
         if self._monitor:
             self._monitor.stop()
             self._monitor = None
@@ -1125,7 +1413,74 @@ class ClipboardPickerPanel(NSPanel):
         )
         self._monitor.start()
 
+    def on_slot_hover(self, slot, slot_data, entered):
+        """Show floating Quick Look on hover; keep open when pointer moves onto the preview."""
+        if entered:
+            self._cancel_hide_quicklook()
+            self._hovered_slot = slot
+            self._hovered_data = slot_data
+            self._show_quicklook(slot_data)
+        else:
+            if self._hovered_slot == slot:
+                self._hovered_slot = None
+                self._hovered_data = None
+                # Delay hide so the user can move into the preview window
+                self._schedule_hide_quicklook()
+
+    def on_quicklook_hover(self, entered):
+        """Called when the pointer enters/leaves the floating preview itself."""
+        if entered:
+            self._cancel_hide_quicklook()
+        else:
+            # Left the preview – hide unless still over a slot row
+            if self._hovered_slot is None:
+                self._schedule_hide_quicklook()
+
+    def _schedule_hide_quicklook(self):
+        self._cancel_hide_quicklook()
+        # NSTimer fires on the main run-loop (AppKit-safe)
+        from Foundation import NSTimer
+        self._ql_hide_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+            0.18, self, "hideQuickLookIfIdle:", None, False
+        )
+
+    def _cancel_hide_quicklook(self):
+        t = getattr(self, "_ql_hide_timer", None)
+        if t is not None:
+            try:
+                t.invalidate()
+            except Exception:
+                pass
+            self._ql_hide_timer = None
+
+    def hideQuickLookIfIdle_(self, _timer):
+        self._ql_hide_timer = None
+        # Still over a slot or the preview? Keep it.
+        if self._hovered_slot is not None:
+            return
+        if self._quicklook is not None and self._quicklook.is_mouse_over():
+            return
+        self._hide_quicklook()
+
+    def _show_quicklook(self, slot_data):
+        if self._closed:
+            return
+        # Skip empty slots
+        if not slot_data.get("text") and not slot_data.get("image_hash") and slot_data.get("kind") != "color":
+            return
+        if self._quicklook is None:
+            self._quicklook = QuickLookPreviewPanel.alloc().init()
+        self._quicklook.showForSlot_nearPanel_(slot_data, self)
+
+    def _hide_quicklook(self):
+        self._cancel_hide_quicklook()
+        if self._quicklook is not None:
+            self._quicklook.hide_preview()
+
     def _rebuild_content(self):
+        self._hide_quicklook()
+        self._hovered_slot = None
+        self._hovered_data = None
         self._build_content()
         self.orderFrontRegardless()
         self.makeKeyAndOrderFront_(None)
@@ -1169,7 +1524,7 @@ class ClipboardPickerPanel(NSPanel):
         title = NSTextField.alloc().initWithFrame_(
             NSMakeRect(14, PANEL_HEIGHT - TITLE_HEIGHT - 6, PANEL_WIDTH - 50, 22)
         )
-        title.setStringValue_("1–9 paste • ⌥ pin • ⌘ delete • 0 clear • Esc")
+        title.setStringValue_("1–9 paste • ⌥ pin • ⌘ del • hover peek • 0 clear • Esc")
         title.setBezeled_(False)
         title.setDrawsBackground_(False)
         title.setEditable_(False)
@@ -1195,12 +1550,13 @@ class ClipboardPickerPanel(NSPanel):
         content_top = PANEL_HEIGHT - TITLE_HEIGHT - PANEL_PADDING
         for i, slot_data in enumerate(self.store.snapshot()):
             row_y = content_top - (i + 1) * SLOT_HEIGHT - i * SLOT_GAP
-            row = SlotRowView.alloc().initWithFrame_slotData_onSelect_onTogglePin_onDelete_(
+            row = SlotRowView.alloc().initWithFrame_slotData_onSelect_onTogglePin_onDelete_onHover_(
                 NSMakeRect(10, row_y, PANEL_WIDTH - 20, SLOT_HEIGHT),
                 slot_data,
                 self.select_slot,
                 self.toggle_pin,
                 self.delete_slot,
+                self.on_slot_hover,
             )
             content.addSubview_(row)
         self.setContentView_(content)
@@ -1212,13 +1568,18 @@ objc.registerMetaDataForSelector(
 )
 objc.registerMetaDataForSelector(
     b"SlotRowView",
-    b"initWithFrame:slotData:onSelect:onTogglePin:onDelete:",
+    b"initWithFrame:slotData:onSelect:onTogglePin:onDelete:onHover:",
     {"arguments": {
         2 + 1: {"type": b"@"},
         3 + 1: {"type": b"@"},
         4 + 1: {"type": b"@"},
         5 + 1: {"type": b"@"},
+        6 + 1: {"type": b"@"},
     }},
+)
+objc.registerMetaDataForSelector(
+    b"QuickLookHoverView", b"initWithFrame:onHover:",
+    {"arguments": {2 + 1: {"type": b"@"}}},
 )
 
 
