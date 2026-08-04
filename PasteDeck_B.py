@@ -1139,11 +1139,32 @@ class ClipboardPickerPanel(NSPanel):
         content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
         content.setState_(NSVisualEffectStateActive)
         content.setWantsLayer_(True)
-        content.layer().setCornerRadius_(12.0)
-        content.layer().setMasksToBounds_(True)
 
-        
-        content.layer().setCornerRadius_(12.0)
+        radius = 12.0
+        # Prefer maskImage for clean rounded corners (no black rim).
+        # Falls back to layer cornerRadius if anything goes wrong.
+        try:
+            from AppKit import NSBezierPath, NSEdgeInsetsMake, NSImageResizingModeStretch
+            mask = NSImage.alloc().initWithSize_((radius * 2, radius * 2))
+            mask.lockFocus()
+            NSColor.blackColor().set()
+            path = NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
+                NSMakeRect(0, 0, radius * 2, radius * 2), radius, radius
+            )
+            path.fill()
+            mask.unlockFocus()
+            mask.setCapInsets_(NSEdgeInsetsMake(radius, radius, radius, radius))
+            mask.setResizingMode_(NSImageResizingModeStretch)
+            content.setMaskImage_(mask)
+        except Exception:
+            pass
+
+        layer = content.layer()
+        if layer is not None:
+            layer.setCornerRadius_(radius)
+            layer.setMasksToBounds_(True)
+            layer.setBorderWidth_(0.0)
+            layer.setBorderColor_(NSColor.clearColor().CGColor())
 
         title = NSTextField.alloc().initWithFrame_(
             NSMakeRect(14, PANEL_HEIGHT - TITLE_HEIGHT - 6, PANEL_WIDTH - 50, 22)
