@@ -164,11 +164,14 @@ def remember_frontmost_app():
         if current and current.bundleIdentifier() != our:
             _previous_app = current
         else:
-            for app in NSWorkspace.sharedWorkspace().runningApplications():
-                if (app.activationPolicy() == 0 and app.bundleIdentifier() != our
-                        and not app.isHidden()):
-                    _previous_app = app
-                    break
+            # Prefer the most recent non-hidden regular app
+            candidates = [
+                app for app in NSWorkspace.sharedWorkspace().runningApplications()
+                if (app.activationPolicy() == 0
+                    and app.bundleIdentifier() != our
+                    and not app.isHidden())
+            ]
+            _previous_app = candidates[0] if candidates else None
     except Exception:
         _previous_app = None
 
@@ -176,7 +179,9 @@ def restore_frontmost_app():
     global _previous_app
     if _previous_app is not None:
         try:
-            _previous_app.activateWithOptions_(1 << 1)
+            # Force activation even if the process is still around
+            _previous_app.activateWithOptions_(1 << 1)  # NSApplicationActivateIgnoringOtherApps
+            time.sleep(0.05)  # tiny settle
         except Exception:
             pass
         _previous_app = None
@@ -284,17 +289,37 @@ def write_pasteboard(slot: dict) -> None:
         pb.setString_forType_(text, NSPasteboardTypeString)
 
 def simulate_paste() -> None:
+    """More reliable paste simulation."""
     import subprocess
+    import Quartz
+    from Quartz import (
+        CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags,
+        kCGEventFlagMaskCommand, kCGHIDEventTap, kCGEventKeyDown, kCGEventKeyUp
+    )
+
     restore_frontmost_app()
-    time.sleep(0.35)
+    # Give the target app more time after long uptime / sleep
+    time.sleep(0.45)
+
     try:
-        subprocess.run(
-            ["osascript", "-e",
-             'tell application "System Events" to keystroke "v" using command down'],
-            check=False, capture_output=True,
-        )
+        # Preferred: pure CGEvent (no System Events dependency)
+        source = Quartz.CGEventSourceCreate(0)  # kCGEventSourceStateHIDSystemState
+        key_down = CGEventCreateKeyboardEvent(source, 9, True)   # 'v' = 9
+        key_up   = CGEventCreateKeyboardEvent(source, 9, False)
+        CGEventSetFlags(key_down, kCGEventFlagMaskCommand)
+        CGEventSetFlags(key_up,   kCGEventFlagMaskCommand)
+        CGEventPost(kCGHIDEventTap, key_down)
+        CGEventPost(kCGHIDEventTap, key_up)
     except Exception:
-        pass
+        # Fallback to AppleScript only if CGEvent fails
+        try:
+            subprocess.run(
+                ["osascript", "-e",
+                 'tell application "System Events" to keystroke "v" using command down'],
+                check=False, capture_output=True, timeout=2,
+            )
+        except Exception:
+            pass
 
 def get_cursor_point():
     import Quartz
