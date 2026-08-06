@@ -24,6 +24,7 @@ from AppKit import (
     NSApplication,
     NSBackingStoreBuffered,
     NSBitmapImageRep,
+    NSButton,
     NSColor,
     NSEvent,
     NSFont,
@@ -38,9 +39,11 @@ from AppKit import (
     NSPasteboardTypeRTF,
     NSPasteboardTypeString,
     NSPasteboardTypeTIFF,
+    NSPopUpButton,
     NSRunningApplication,
     NSScreen,
     NSScrollView,
+    NSSlider,
     NSTextField,
     NSTextView,
     NSTrackingArea,
@@ -52,10 +55,14 @@ from AppKit import (
     NSVisualEffectBlendingModeBehindWindow,
     NSVisualEffectStateActive,
     NSView,
+    NSWindow,
     NSWindowStyleMaskBorderless,
+    NSWindowStyleMaskTitled,
+    NSWindowStyleMaskClosable,
+    NSWindowStyleMaskMiniaturizable,
     NSWorkspace,
 )
-from Foundation import NSData
+from Foundation import NSData, NSObject
 from quickmachotkey import quickHotKey, mask
 from quickmachotkey.constants import kVK_ANSI_V, cmdKey, optionKey, shiftKey
 
@@ -66,27 +73,31 @@ NUM_SLOTS = 9
 PREVIEW_LEN = 55
 TOOLTIP_LEN = 800
 DATA_FILE = Path.home() / ".multi-clipboard.json"
+SETTINGS_FILE = Path.home() / ".pastedeck-settings.json"
 CACHE_DIR = Path.home() / ".multi-clipboard-cache"
 CACHE_DIR.mkdir(exist_ok=True)
 
 PANEL_WIDTH = 400
 SLOT_HEIGHT = 36
 SLOT_GAP = 3
-PANEL_PADDING = 10
-TITLE_HEIGHT = 24
+PANEL_PADDING = 12
+TITLE_TOP_INSET = 14  # breathing room above the title (mac-like)
+TITLE_HEIGHT = 48  # bold title + subtitle block
 
 PANEL_HEIGHT = (
-    TITLE_HEIGHT
-    + PANEL_PADDING * 2
+    TITLE_TOP_INSET
+    + TITLE_HEIGHT
+    + PANEL_PADDING
     + NUM_SLOTS * SLOT_HEIGHT
     + (NUM_SLOTS - 1) * SLOT_GAP
+    + PANEL_PADDING
 )
 
 SLOT_KEYS = frozenset("1234567890")
 KEY_DOWN_MASK = 1 << 10
 MOUSE_DOWN_MASK = (1 << 1) | (1 << 3) | (1 << 25)
 ESCAPE_KEYCODE = 53
-SENSITIVE_EXPIRE_SECONDS = 45
+DEFAULT_SENSITIVE_EXPIRE_SECONDS = 45
 
 # Quick Look floating preview
 QL_MAX_WIDTH = 520
@@ -97,6 +108,37 @@ QL_IMAGE_MAX = 480
 
 _active_panel = None
 _previous_app = None
+_settings_window = None
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+DEFAULT_SETTINGS = {
+    "sensitive_expire_seconds": DEFAULT_SENSITIVE_EXPIRE_SECONDS,
+    "show_notifications": True,
+    "poll_interval": 0.4,
+}
+
+
+def load_settings() -> dict:
+    settings = dict(DEFAULT_SETTINGS)
+    if SETTINGS_FILE.exists():
+        try:
+            data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                settings.update({k: data[k] for k in DEFAULT_SETTINGS if k in data})
+        except (OSError, json.JSONDecodeError):
+            pass
+    return settings
+
+
+def save_settings(settings: dict) -> None:
+    try:
+        SETTINGS_FILE.write_text(
+            json.dumps(settings, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+    except OSError:
+        pass
 
 # ---------------------------------------------------------------------------
 # Sensitive-source detection (tightened – no browsers, URLs excluded)
@@ -412,12 +454,13 @@ def minimize_terminal_window() -> None:
 # Store
 # ---------------------------------------------------------------------------
 class ClipboardStore:
-    def __init__(self) -> None:
+    def __init__(self, settings: dict | None = None) -> None:
         self._lock = threading.Lock()
         self._slots: list[dict] = [self._empty_slot() for _ in range(NUM_SLOTS)]
         self._ignore_next_change = False
         self._last_change_count = NSPasteboard.generalPasteboard().changeCount()
         self._title_cache: dict[str, str] = {}
+        self.settings = settings if settings is not None else load_settings()
         self.load()
         self._reaper = threading.Thread(target=self._reaper_loop, daemon=True)
         self._reaper.start()
@@ -683,14 +726,15 @@ class ClipboardStore:
     def _reaper_loop(self) -> None:
         while True:
             time.sleep(5)
-            if SENSITIVE_EXPIRE_SECONDS <= 0:
+            expire = int(self.settings.get("sensitive_expire_seconds", DEFAULT_SENSITIVE_EXPIRE_SECONDS))
+            if expire <= 0:
                 continue
             now = time.time()
             changed = False
             with self._lock:
                 for s in self._slots:
                     if (s.get("sensitive") and s.get("created_at")
-                            and now - s["created_at"] > SENSITIVE_EXPIRE_SECONDS):
+                            and now - s["created_at"] > expire):
                         s.update(self._empty_slot())
                         changed = True
             if changed:
@@ -701,7 +745,7 @@ class ClipboardStore:
             try:
                 import urllib.request
                 req = urllib.request.Request(
-                    url, headers={"User-Agent": "MultiClipboard/1.0"}
+                    url, headers={"User-Agent": "PasteDeck/1.0"}
                 )
                 with urllib.request.urlopen(req, timeout=3) as resp:
                     html = resp.read(8192).decode("utf-8", errors="ignore")
@@ -1526,20 +1570,37 @@ class ClipboardPickerPanel(NSPanel):
             layer.setBorderWidth_(0.0)
             layer.setBorderColor_(NSColor.clearColor().CGColor())
 
+        # Bold title + subtitle, inset from the top for a more mac-like feel
+        title_y = PANEL_HEIGHT - TITLE_TOP_INSET - 22
         title = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(14, PANEL_HEIGHT - TITLE_HEIGHT - 6, PANEL_WIDTH - 50, 22)
+            NSMakeRect(14, title_y, PANEL_WIDTH - 54, 22)
         )
-        title.setStringValue_("1–9 paste • ⌥ pin • ⌘ del • hover peek • 0 clear • Esc")
+        title.setStringValue_("PasteDeck")
         title.setBezeled_(False)
         title.setDrawsBackground_(False)
         title.setEditable_(False)
         title.setSelectable_(False)
-        title.setFont_(NSFont.boldSystemFontOfSize_(11))
+        title.setAlignment_(0)  # NSTextAlignmentLeft
+        title.setFont_(NSFont.boldSystemFontOfSize_(17))
         title.setTextColor_(NSColor.whiteColor())
         content.addSubview_(title)
 
+        subtitle_y = title_y - 16
+        subtitle = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(14, subtitle_y, PANEL_WIDTH - 54, 14)
+        )
+        subtitle.setStringValue_("1–9 paste  ·  ⌥ pin  ·  ⌘ del  ·  hover peek  ·  0 clear")
+        subtitle.setBezeled_(False)
+        subtitle.setDrawsBackground_(False)
+        subtitle.setEditable_(False)
+        subtitle.setSelectable_(False)
+        subtitle.setAlignment_(0)  # left
+        subtitle.setFont_(NSFont.systemFontOfSize_(10))
+        subtitle.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.65, 1.0))
+        content.addSubview_(subtitle)
+
         close_btn = CloseButtonView.alloc().initWithFrame_onClose_(
-            NSMakeRect(PANEL_WIDTH - 34, PANEL_HEIGHT - 30, 24, 24),
+            NSMakeRect(PANEL_WIDTH - 36, PANEL_HEIGHT - TITLE_TOP_INSET - 22, 24, 24),
             self.close_panel,
         )
         tracking = NSTrackingArea.alloc().initWithRect_options_owner_userInfo_(
@@ -1552,7 +1613,8 @@ class ClipboardPickerPanel(NSPanel):
         close_btn.addTrackingArea_(tracking)
         content.addSubview_(close_btn)
 
-        content_top = PANEL_HEIGHT - TITLE_HEIGHT - PANEL_PADDING
+        # Slots start below the title block with a little extra gap
+        content_top = PANEL_HEIGHT - TITLE_TOP_INSET - TITLE_HEIGHT - 4
         for i, slot_data in enumerate(self.store.snapshot()):
             row_y = content_top - (i + 1) * SLOT_HEIGHT - i * SLOT_GAP
             row = SlotRowView.alloc().initWithFrame_slotData_onSelect_onTogglePin_onDelete_onHover_(
@@ -1584,6 +1646,10 @@ objc.registerMetaDataForSelector(
 )
 objc.registerMetaDataForSelector(
     b"QuickLookHoverView", b"initWithFrame:onHover:",
+    {"arguments": {2 + 1: {"type": b"@"}}},
+)
+objc.registerMetaDataForSelector(
+    b"SettingsWindowController", b"initWithApp:",
     {"arguments": {2 + 1: {"type": b"@"}}},
 )
 
@@ -1631,23 +1697,241 @@ def open_picker_panel(store: ClipboardStore) -> None:
         print(f"[DEBUG] panel error: {e}")
 
 
+# ---------------------------------------------------------------------------
+# Settings window
+# ---------------------------------------------------------------------------
+class SettingsWindowController(NSObject):
+    """Lightweight controller that keeps the settings window alive and wired."""
+
+    def initWithApp_(self, app):
+        self = objc.super(SettingsWindowController, self).init()
+        if self is None:
+            return None
+        self.app = app
+        self.window = None
+        self._expire_popup = None
+        self._notify_btn = None
+        self._expire_label = None
+        return self
+
+    def show(self):
+        if self.window is not None and self.window.isVisible():
+            self.window.makeKeyAndOrderFront_(None)
+            NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+            return
+
+        width, height = 420, 320
+        style = (
+            NSWindowStyleMaskTitled
+            | NSWindowStyleMaskClosable
+            | NSWindowStyleMaskMiniaturizable
+        )
+        frame = NSMakeRect(0, 0, width, height)
+        self.window = NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
+            frame, style, NSBackingStoreBuffered, False
+        )
+        self.window.setTitle_("PasteDeck Settings")
+        self.window.center()
+        self.window.setReleasedWhenClosed_(False)
+
+        content = NSView.alloc().initWithFrame_(frame)
+        settings = self.app.store.settings
+
+        # --- Header ---
+        header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 48, width - 40, 24))
+        header.setStringValue_("Preferences")
+        header.setBezeled_(False)
+        header.setDrawsBackground_(False)
+        header.setEditable_(False)
+        header.setSelectable_(False)
+        header.setFont_(NSFont.boldSystemFontOfSize_(16))
+        content.addSubview_(header)
+
+        desc = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 70, width - 40, 18))
+        desc.setStringValue_("Adjust how PasteDeck handles privacy and feedback.")
+        desc.setBezeled_(False)
+        desc.setDrawsBackground_(False)
+        desc.setEditable_(False)
+        desc.setSelectable_(False)
+        desc.setFont_(NSFont.systemFontOfSize_(11))
+        desc.setTextColor_(NSColor.secondaryLabelColor())
+        content.addSubview_(desc)
+
+        # --- Sensitive expire ---
+        expire_title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 110, 200, 18))
+        expire_title.setStringValue_("Sensitive auto-expire")
+        expire_title.setBezeled_(False)
+        expire_title.setDrawsBackground_(False)
+        expire_title.setEditable_(False)
+        expire_title.setSelectable_(False)
+        expire_title.setFont_(NSFont.systemFontOfSize_(13))
+        content.addSubview_(expire_title)
+
+        self._expire_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(20, height - 130, width - 40, 16)
+        )
+        self._expire_label.setBezeled_(False)
+        self._expire_label.setDrawsBackground_(False)
+        self._expire_label.setEditable_(False)
+        self._expire_label.setSelectable_(False)
+        self._expire_label.setFont_(NSFont.systemFontOfSize_(11))
+        self._expire_label.setTextColor_(NSColor.secondaryLabelColor())
+        content.addSubview_(self._expire_label)
+
+        self._expire_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(20, height - 162, 200, 26), False
+        )
+        expire_options = [
+            (15, "15 seconds"),
+            (30, "30 seconds"),
+            (45, "45 seconds"),
+            (60, "1 minute"),
+            (120, "2 minutes"),
+            (300, "5 minutes"),
+            (0, "Never (manual only)"),
+        ]
+        current = int(settings.get("sensitive_expire_seconds", DEFAULT_SENSITIVE_EXPIRE_SECONDS))
+        selected_idx = 2  # default 45s
+        for i, (secs, label) in enumerate(expire_options):
+            self._expire_popup.addItemWithTitle_(label)
+            self._expire_popup.itemAtIndex_(i).setTag_(secs)
+            if secs == current:
+                selected_idx = i
+        self._expire_popup.selectItemAtIndex_(selected_idx)
+        self._expire_popup.setTarget_(self)
+        self._expire_popup.setAction_("expireChanged:")
+        content.addSubview_(self._expire_popup)
+        self._update_expire_label(current)
+
+        # --- Notifications ---
+        notify_title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 210, 200, 18))
+        notify_title.setStringValue_("Notifications")
+        notify_title.setBezeled_(False)
+        notify_title.setDrawsBackground_(False)
+        notify_title.setEditable_(False)
+        notify_title.setSelectable_(False)
+        notify_title.setFont_(NSFont.systemFontOfSize_(13))
+        content.addSubview_(notify_title)
+
+        self._notify_btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(20, height - 238, width - 40, 24)
+        )
+        self._notify_btn.setButtonType_(3)  # NSSwitchButton / NSButtonTypeSwitch
+        self._notify_btn.setTitle_("Show notifications for clear actions")
+        self._notify_btn.setState_(1 if settings.get("show_notifications", True) else 0)
+        self._notify_btn.setTarget_(self)
+        self._notify_btn.setAction_("notifyChanged:")
+        content.addSubview_(self._notify_btn)
+
+        # --- Footer actions ---
+        save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(width - 110, 20, 90, 32))
+        save_btn.setTitle_("Save")
+        save_btn.setBezelStyle_(1)  # rounded
+        save_btn.setKeyEquivalent_("\r")
+        save_btn.setTarget_(self)
+        save_btn.setAction_("saveSettings:")
+        content.addSubview_(save_btn)
+
+        cancel_btn = NSButton.alloc().initWithFrame_(NSMakeRect(width - 200, 20, 80, 32))
+        cancel_btn.setTitle_("Cancel")
+        cancel_btn.setBezelStyle_(1)
+        cancel_btn.setTarget_(self)
+        cancel_btn.setAction_("cancelSettings:")
+        content.addSubview_(cancel_btn)
+
+        about = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 24, 180, 16))
+        about.setStringValue_("PasteDeck  ·  local & private")
+        about.setBezeled_(False)
+        about.setDrawsBackground_(False)
+        about.setEditable_(False)
+        about.setSelectable_(False)
+        about.setFont_(NSFont.systemFontOfSize_(10))
+        about.setTextColor_(NSColor.tertiaryLabelColor())
+        content.addSubview_(about)
+
+        self.window.setContentView_(content)
+        self.window.makeKeyAndOrderFront_(None)
+        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+
+    def _update_expire_label(self, seconds: int):
+        if seconds <= 0:
+            text = "Sensitive items stay until you clear them."
+        elif seconds < 60:
+            text = f"Password-manager & high-entropy clips vanish after {seconds}s."
+        else:
+            mins = seconds // 60
+            text = f"Password-manager & high-entropy clips vanish after {mins} min."
+        self._expire_label.setStringValue_(text)
+
+    def expireChanged_(self, sender):
+        tag = sender.selectedItem().tag()
+        self._update_expire_label(int(tag))
+
+    def notifyChanged_(self, sender):
+        pass  # state read on save
+
+    def saveSettings_(self, sender):
+        secs = int(self._expire_popup.selectedItem().tag())
+        notify = bool(self._notify_btn.state())
+        self.app.store.settings["sensitive_expire_seconds"] = secs
+        self.app.store.settings["show_notifications"] = notify
+        save_settings(self.app.store.settings)
+        self.window.orderOut_(None)
+
+    def cancelSettings_(self, sender):
+        self.window.orderOut_(None)
+
+
 class MultiClipboardApp(rumps.App):
     def __init__(self, store: ClipboardStore) -> None:
-        super().__init__("Multi-Clipboard", title="📋", quit_button=None)
+        super().__init__("PasteDeck", title="📋", quit_button=None)
         self.store = store
         self._open_picker_requested = False
+        self._settings_controller = None
+
+        # Refined menu-bar dropdown when the icon is clicked:
+        # bold, larger white "PasteDeck" title. Use a no-op callback so the
+        # item stays enabled (full white) instead of the grey disabled look.
+        def _title_noop(_):
+            pass
+
+        header = rumps.MenuItem("PasteDeck", callback=_title_noop)
+        try:
+            from Foundation import NSAttributedString, NSMutableDictionary
+            from AppKit import NSFontAttributeName, NSForegroundColorAttributeName
+            attrs = NSMutableDictionary.dictionary()
+            attrs.setObject_forKey_(
+                NSFont.boldSystemFontOfSize_(15), NSFontAttributeName
+            )
+            attrs.setObject_forKey_(
+                NSColor.whiteColor(), NSForegroundColorAttributeName
+            )
+            attributed = NSAttributedString.alloc().initWithString_attributes_(
+                "PasteDeck", attrs
+            )
+            ns_item = getattr(header, "_menuitem", None) or getattr(header, "nsmenuitem", None)
+            if ns_item is not None:
+                ns_item.setAttributedTitle_(attributed)
+                ns_item.setEnabled_(True)
+        except Exception:
+            pass
 
         self.menu = [
-            rumps.MenuItem("Open Picker (⌘⌥⇧V)", callback=self.open_picker),
+            header,
+            None,
+            rumps.MenuItem("Open Picker                    ⌘⌥⇧V", callback=self.open_picker),
             None,
             rumps.MenuItem("Clear Unpinned", callback=self.clear_slots),
             rumps.MenuItem("Clear Sensitive Now", callback=self.clear_sensitive),
             rumps.MenuItem("Clear Everything", callback=self.clear_all),
             None,
-            rumps.MenuItem("Quit", callback=self.quit_app),
+            rumps.MenuItem("Settings…", callback=self.open_settings),
+            None,
+            rumps.MenuItem("Quit PasteDeck", callback=self.quit_app),
         ]
 
-        self._poll_timer = rumps.Timer(self.poll_clipboard, 0.4)
+        poll = float(store.settings.get("poll_interval", 0.4))
+        self._poll_timer = rumps.Timer(self.poll_clipboard, poll)
         self._poll_timer.start()
         self._hotkey_timer = rumps.Timer(self.handle_hotkey_request, 0.05)
         self._hotkey_timer.start()
@@ -1657,20 +1941,29 @@ class MultiClipboardApp(rumps.App):
             self._open_picker_requested = True
         self._hotkey_handler = on_hotkey
 
+    def _notify(self, subtitle: str, message: str) -> None:
+        if self.store.settings.get("show_notifications", True):
+            rumps.notification("PasteDeck", subtitle, message)
+
     def open_picker(self, _=None):
         toggle_picker_panel(self.store)
 
+    def open_settings(self, _=None):
+        if self._settings_controller is None:
+            self._settings_controller = SettingsWindowController.alloc().initWithApp_(self)
+        self._settings_controller.show()
+
     def clear_slots(self, _=None):
         self.store.clear()
-        rumps.notification("Multi-Clipboard", "Cleared", "Unpinned slots cleared")
+        self._notify("Cleared", "Unpinned slots cleared")
 
     def clear_sensitive(self, _=None):
         self.store.clear_sensitive()
-        rumps.notification("Multi-Clipboard", "Privacy", "Sensitive items removed")
+        self._notify("Privacy", "Sensitive items removed")
 
     def clear_all(self, _=None):
         self.store.clear_all()
-        rumps.notification("Multi-Clipboard", "Cleared", "Everything removed")
+        self._notify("Cleared", "Everything removed")
 
     def quit_app(self, _=None):
         if _active_panel is not None:
@@ -1687,13 +1980,14 @@ class MultiClipboardApp(rumps.App):
 
 
 def main() -> None:
-    print("[DEBUG] Starting Multi-Clipboard (pre-network version) …")
-    store = ClipboardStore()
+    print("[DEBUG] Starting PasteDeck …")
+    settings = load_settings()
+    store = ClipboardStore(settings)
     app = MultiClipboardApp(store)
-    
+
     # Minimize terminal window at startup
     threading.Timer(0.5, minimize_terminal_window).start()
-    
+
     app.run()
 
 
