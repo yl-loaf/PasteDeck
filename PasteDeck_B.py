@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Multi-clipboard manager for macOS – rich text, visual previews, pinned clips,
-   privacy controls, and Instant In-Line Quick Look (hover a slot to peek).
+   privacy controls, Instant In-Line Quick Look (hover a slot to peek),
+   and Translate controls inside Quick Look (Apple language detection + MyMemory).
    (Network sync removed)
 """
 
@@ -293,6 +294,153 @@ def url_host(text: str) -> str:
         return p.netloc or p.path or text
     except Exception:
         return text
+
+
+def detect_language(text: str) -> str | None:
+    """Apple NaturalLanguage framework – dominant language BCP-47 tag."""
+    if not text or not text.strip():
+        return None
+    try:
+        from NaturalLanguage import NLLanguageRecognizer
+        recognizer = NLLanguageRecognizer.alloc().init()
+        recognizer.processString_(text[:4000])
+        lang = recognizer.dominantLanguage()
+        return str(lang) if lang else None
+    except Exception:
+        return None
+
+
+# Common target languages for the Quick Look dropdown (code, display name)
+TRANSLATE_LANGS = [
+    ("en", "English"),
+    ("es", "Spanish"),
+    ("fr", "French"),
+    ("de", "German"),
+    ("it", "Italian"),
+    ("pt", "Portuguese"),
+    ("zh", "Chinese"),
+    ("ja", "Japanese"),
+    ("ko", "Korean"),
+    ("ru", "Russian"),
+    ("ar", "Arabic"),
+    ("nl", "Dutch"),
+    ("pl", "Polish"),
+    ("tr", "Turkish"),
+    ("hi", "Hindi"),
+    ("sv", "Swedish"),
+    ("uk", "Ukrainian"),
+    ("vi", "Vietnamese"),
+    ("th", "Thai"),
+    ("id", "Indonesian"),
+]
+
+
+def preferred_target_language() -> str:
+    """Default target language is always English."""
+    return "en"
+
+
+def _ssl_context():
+    """SSL context that works even when macOS Python certificates are broken."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+    try:
+        return ssl.create_default_context()
+    except Exception:
+        pass
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+def translate_text(text: str, source: str = "auto", target: str | None = None) -> tuple[str | None, str | None]:
+    """Translate text. Returns (translated_text, short_error).
+    Primary: Google free endpoint. Fallback: MyMemory.
+    Handles the common macOS Python SSL certificate problem.
+    """
+    if not text or not text.strip():
+        return None, "Empty text"
+    target = (target or preferred_target_language()).lower()
+    src = (source or "auto").lower()
+    if src != "auto" and src == target:
+        return text, None
+
+    def _short(err: Exception | str) -> str:
+        s = str(err)
+        if "CERTIFICATE_VERIFY_FAILED" in s or "certificate verify failed" in s.lower():
+            return "SSL cert error"
+        if "HTTP Error" in s:
+            return s.split(":", 1)[-1].strip()[:60]
+        if "urlopen error" in s.lower() or "nodename nor servname" in s.lower():
+            return "Network error"
+        if "timed out" in s.lower():
+            return "Timed out"
+        return s[:60]
+
+    ctx = _ssl_context()
+    google_err = "Empty response"
+
+    # --- Primary: Google Translate free endpoint ---
+    try:
+        import urllib.request
+        import urllib.parse
+        params = urllib.parse.urlencode({
+            "client": "gtx",
+            "sl": src if src != "auto" else "auto",
+            "tl": target,
+            "dt": "t",
+            "q": text[:4500],
+        })
+        url = f"https://translate.googleapis.com/translate_a/single?{params}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                "Accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            if isinstance(data, list) and data and isinstance(data[0], list):
+                parts = []
+                for item in data[0]:
+                    if item and isinstance(item, list) and item[0]:
+                        parts.append(str(item[0]))
+                result = "".join(parts).strip()
+                if result:
+                    return result, None
+    except Exception as e:
+        google_err = _short(e)
+
+    # --- Fallback: MyMemory ---
+    try:
+        import urllib.request
+        import urllib.parse
+        langpair = f"{src}|{target}" if src != "auto" else f"autodetect|{target}"
+        params = urllib.parse.urlencode({
+            "q": text[:4500],
+            "langpair": langpair,
+        })
+        url = f"https://api.mymemory.translated.net/get?{params}"
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "PasteDeck/1.0", "Accept": "application/json"},
+        )
+        with urllib.request.urlopen(req, timeout=12, context=ctx) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+            if data.get("responseStatus") == 200:
+                result = (data.get("responseData") or {}).get("translatedText")
+                if isinstance(result, str) and result.strip():
+                    return result, None
+            return None, f"Service error ({data.get('responseStatus')})"
+    except Exception:
+        return None, f"Translation failed ({google_err})"
+
 
 def read_pasteboard() -> dict:
     pb = NSPasteboard.generalPasteboard()
@@ -682,6 +830,29 @@ class ClipboardStore:
         with self._lock:
             return dict(self._slots[index]) if 0 <= index < NUM_SLOTS else self._empty_slot()
 
+    def replace_slot_text(self, slot_number: int, new_text: str) -> bool:
+        """Replace a slot's text with plain translated text. Returns True on success."""
+        index = slot_number - 1
+        new_text = (new_text or "").strip()
+        if not new_text or not (0 <= index < NUM_SLOTS):
+            return False
+        with self._lock:
+            s = self._slots[index]
+            if not s.get("text") and not s.get("image_hash"):
+                return False
+            kind, color, url_title = self._classify(new_text)
+            s["text"] = new_text
+            s["rtf"] = None
+            s["html"] = None
+            s["has_style"] = False
+            s["kind"] = kind
+            s["color"] = color
+            s["url_title"] = url_title
+            s["image_hash"] = None
+            # keep pin / sensitive / created_at
+        self.save()
+        return True
+
     def paste_slot(self, slot_number: int) -> None:
         s = self.get_slot(slot_number)
         if not s.get("text") and not s.get("image_hash"):
@@ -815,6 +986,15 @@ class QuickLookPreviewPanel(NSPanel):
         self._slot = None
         self._picker = None
         self._over_preview = False
+        self._text_view = None
+        self._scroll_view = None
+        self._original_text = None
+        self._translated_text = None
+        self._translate_btn = None
+        self._replace_btn = None
+        self._lang_popup = None
+        self._target_lang = "en"
+        self._translating = False
         return self
 
     def showForSlot_nearPanel_(self, slot_data, picker_panel):
@@ -824,6 +1004,15 @@ class QuickLookPreviewPanel(NSPanel):
         self._slot = slot_data.get("slot")
         self._picker = picker_panel
         self._over_preview = False
+        self._text_view = None
+        self._scroll_view = None
+        self._original_text = None
+        self._translated_text = None
+        self._translate_btn = None
+        self._replace_btn = None
+        self._lang_popup = None
+        self._target_lang = "en"
+        self._translating = False
         kind = slot_data.get("kind", "text")
         text = slot_data.get("text") or ""
         sensitive = slot_data.get("sensitive", False)
@@ -958,14 +1147,37 @@ class QuickLookPreviewPanel(NSPanel):
         self.setContentView_(content)
         self.setContentSize_(NSMakeSize(width, height))
 
-        # position to the right of the picker (or left if no room)
+        # Position beside the picker, vertically aligned with the hovered slot
+        # so the mouse can reach the preview from any slot (including 3+).
         pf = picker_panel.frame()
         screen = NSScreen.mainScreen().visibleFrame()
         ql_x = pf.origin.x + pf.size.width + 10
         if ql_x + width > screen.origin.x + screen.size.width - 8:
             ql_x = pf.origin.x - width - 10
-        ql_y = pf.origin.y + pf.size.height - height
-        # keep on screen vertically
+
+        # Prefer real on-screen slot rect (set by picker before calling us)
+        anchor = getattr(self, "_anchor_rect", None)
+        if anchor is not None:
+            try:
+                # Center QL vertically on the slot; bias slightly upward so the
+                # top edge stays near the slot for easy mouse entry.
+                slot_mid = anchor.origin.y + anchor.size.height / 2.0
+                ql_y = slot_mid - height / 2.0
+            except Exception:
+                anchor = None
+        if anchor is None:
+            # Fallback: compute from slot number + panel layout constants
+            slot_num = slot_data.get("slot") or 1
+            try:
+                slot_index = max(0, min(NUM_SLOTS - 1, int(slot_num) - 1))
+            except Exception:
+                slot_index = 0
+            content_top = PANEL_HEIGHT - TITLE_TOP_INSET - TITLE_HEIGHT - 4
+            row_y = content_top - (slot_index + 1) * SLOT_HEIGHT - slot_index * SLOT_GAP
+            slot_mid = pf.origin.y + row_y + SLOT_HEIGHT / 2.0
+            ql_y = slot_mid - height / 2.0
+
+        # Keep fully on screen
         if ql_y < screen.origin.y + 8:
             ql_y = screen.origin.y + 8
         if ql_y + height > screen.origin.y + screen.size.height - 8:
@@ -982,27 +1194,36 @@ class QuickLookPreviewPanel(NSPanel):
         return bool(self._over_preview)
 
     def _add_text_preview(self, content, text: str):
-        """Add a scrollable text view; return (width, height)."""
-        # Cap display length for sanity lol
+        """Add a scrollable text view + language dropdown + Translate button; return (width, height)."""
+        # Cap display length for sanity
         max_chars = 12000
         if len(text) > max_chars:
             text = text[:max_chars] + "\n… (truncated)"
 
-        # estimate size
+        self._original_text = text
+        self._target_lang = "en"
+
+        # estimate size (leave room at bottom for controls)
         lines = text.count("\n") + 1
-        # prefer wider for long lines
         longest = max((len(ln) for ln in text.splitlines()), default=20)
         est_w = min(QL_MAX_WIDTH, max(QL_MIN_WIDTH, min(longest * 7 + 2 * QL_PADDING, QL_MAX_WIDTH)))
-        est_h = min(QL_MAX_HEIGHT, max(100, min(lines * 18 + 2 * QL_PADDING, QL_MAX_HEIGHT)))
+        ctrl_h = 28
+        est_h = min(QL_MAX_HEIGHT, max(110, min(lines * 18 + 2 * QL_PADDING + ctrl_h + 8, QL_MAX_HEIGHT)))
 
+        text_h = est_h - 2 * QL_PADDING - ctrl_h - 6
         scroll = NSScrollView.alloc().initWithFrame_(
-            NSMakeRect(QL_PADDING, QL_PADDING, est_w - 2 * QL_PADDING, est_h - 2 * QL_PADDING)
+            NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + 6, est_w - 2 * QL_PADDING, text_h)
         )
         scroll.setHasVerticalScroller_(True)
         scroll.setHasHorizontalScroller_(False)
-        scroll.setAutohidesScrollers_(True)
-        scroll.setBorderType_(0)  # no border
+        scroll.setAutohidesScrollers_(False)  # always show so translation isn't missed
+        scroll.setBorderType_(0)
         scroll.setDrawsBackground_(False)
+        try:
+            # Prefer overlay-style scroller when available (cleaner look)
+            scroll.setScrollerStyle_(1)  # NSScrollerStyleOverlay
+        except Exception:
+            pass
 
         tv = NSTextView.alloc().initWithFrame_(scroll.contentView().bounds())
         tv.setString_(text)
@@ -1020,13 +1241,209 @@ class QuickLookPreviewPanel(NSPanel):
         tv.setMaxSize_(NSMakeSize(est_w - 2 * QL_PADDING, 1e7))
         scroll.setDocumentView_(tv)
         content.addSubview_(scroll)
+        self._text_view = tv
+        self._scroll_view = scroll
+
+        # Language dropdown + Translate + Replace (Replace enabled after success)
+        popup_w = 100
+        btn_w = 78
+        gap = 6
+        total_ctrl = popup_w + gap + btn_w + gap + btn_w
+        start_x = max(QL_PADDING, est_w - QL_PADDING - total_ctrl)
+
+        # NSPopUpButton for target language
+        popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(start_x, QL_PADDING, popup_w, ctrl_h - 2), False
+        )
+        popup.setFont_(NSFont.systemFontOfSize_(11))
+        try:
+            popup.setControlSize_(1)
+        except Exception:
+            pass
+        popup.removeAllItems()
+        for code, name in TRANSLATE_LANGS:
+            popup.addItemWithTitle_(f"{name} ({code})")
+        popup.selectItemAtIndex_(0)
+        popup.setTarget_(self)
+        popup.setAction_("targetLangChanged:")
+        popup.setToolTip_("Target language")
+        content.addSubview_(popup)
+        self._lang_popup = popup
+
+        # Translate button
+        btn = NSButton.alloc().initWithFrame_(
+            NSMakeRect(start_x + popup_w + gap, QL_PADDING, btn_w, ctrl_h - 2)
+        )
+        btn.setTitle_("Translate")
+        btn.setBezelStyle_(1)
+        btn.setFont_(NSFont.systemFontOfSize_(11))
+        btn.setBordered_(True)
+        try:
+            btn.setControlSize_(1)
+        except Exception:
+            pass
+        btn.setTarget_(self)
+        btn.setAction_("translateClicked:")
+        btn.setToolTip_("Translate this text")
+        content.addSubview_(btn)
+        self._translate_btn = btn
+
+        # Replace button (disabled until a translation exists)
+        rep = NSButton.alloc().initWithFrame_(
+            NSMakeRect(start_x + popup_w + gap + btn_w + gap, QL_PADDING, btn_w, ctrl_h - 2)
+        )
+        rep.setTitle_("Replace")
+        rep.setBezelStyle_(1)
+        rep.setFont_(NSFont.systemFontOfSize_(11))
+        rep.setBordered_(True)
+        try:
+            rep.setControlSize_(1)
+        except Exception:
+            pass
+        rep.setEnabled_(False)
+        rep.setTarget_(self)
+        rep.setAction_("replaceClicked:")
+        rep.setToolTip_("Replace slot contents with the translation")
+        content.addSubview_(rep)
+        self._replace_btn = rep
+
         return est_w, est_h
+
+    def targetLangChanged_(self, sender):
+        """Update selected target language from the dropdown."""
+        idx = sender.indexOfSelectedItem()
+        if 0 <= idx < len(TRANSLATE_LANGS):
+            self._target_lang = TRANSLATE_LANGS[idx][0]
+        else:
+            self._target_lang = "en"
+
+    def translateClicked_(self, sender):
+        """Action: run language detection + translation in background, update panel."""
+        if self._translating or not self._original_text or not self._text_view:
+            return
+        self._translating = True
+        self._translated_text = None
+        if self._translate_btn:
+            self._translate_btn.setEnabled_(False)
+            self._translate_btn.setTitle_("…")
+        if getattr(self, "_lang_popup", None):
+            self._lang_popup.setEnabled_(False)
+        if getattr(self, "_replace_btn", None):
+            self._replace_btn.setEnabled_(False)
+            self._replace_btn.setTitle_("Replace")
+
+        original = self._original_text
+        tv = self._text_view
+        target = getattr(self, "_target_lang", None) or "en"
+
+        def worker():
+            src = detect_language(original) or "auto"
+            translated_result = None
+            if src != "auto" and src.lower() == target.lower():
+                result_text = original
+                status = f"Already {src}"
+                scroll_to_translation = False
+            else:
+                translated, err = translate_text(original, source=src, target=target)
+                if translated:
+                    header = f"[{src or '?'} → {target}]"
+                    result_text = f"{original}\n\n{header}\n\n{translated}"
+                    status = "Done"
+                    scroll_to_translation = True
+                    translated_result = translated
+                else:
+                    short_err = (err or "Unknown error")[:60]
+                    result_text = f"{original}\n\n⚠ {short_err}"
+                    status = "Failed"
+                    scroll_to_translation = True
+
+            def update():
+                try:
+                    if self._text_view is tv and self._original_text is original:
+                        tv.setString_(result_text)
+                        if scroll_to_translation:
+                            try:
+                                tv.scrollRangeToVisible_((len(result_text), 0))
+                            except Exception:
+                                pass
+                            try:
+                                sv = getattr(self, "_scroll_view", None)
+                                if sv is not None:
+                                    sv.flashScrollers()
+                            except Exception:
+                                pass
+                        if self._translate_btn:
+                            self._translate_btn.setTitle_("✓" if status == "Done" else "Retry")
+                            self._translate_btn.setEnabled_(True)
+                        if getattr(self, "_lang_popup", None):
+                            self._lang_popup.setEnabled_(True)
+                        # Enable Replace only on successful translation
+                        self._translated_text = translated_result
+                        if getattr(self, "_replace_btn", None):
+                            self._replace_btn.setEnabled_(bool(translated_result))
+                            if translated_result:
+                                self._replace_btn.setTitle_("Replace")
+                finally:
+                    self._translating = False
+
+            try:
+                from Foundation import NSOperationQueue
+                NSOperationQueue.mainQueue().addOperationWithBlock_(update)
+            except Exception:
+                update()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def replaceClicked_(self, sender):
+        """Replace the clipboard slot with the translated text."""
+        translated = getattr(self, "_translated_text", None)
+        slot = getattr(self, "_slot", None)
+        picker = getattr(self, "_picker", None)
+        if not translated or slot is None or picker is None:
+            return
+        store = getattr(picker, "store", None)
+        if store is None:
+            return
+
+        ok = store.replace_slot_text(int(slot), translated)
+        if ok:
+            # Also put translation on the system pasteboard
+            try:
+                pb = NSPasteboard.generalPasteboard()
+                pb.clearContents()
+                pb.setString_forType_(translated, NSPasteboardTypeString)
+            except Exception:
+                pass
+            if self._replace_btn:
+                self._replace_btn.setTitle_("✓")
+                self._replace_btn.setEnabled_(False)
+            if self._text_view is not None:
+                self._text_view.setString_(translated)
+            self._original_text = translated
+            self._translated_text = None
+            # Refresh the main picker so the slot shows the new text
+            try:
+                picker._rebuild_content()
+            except Exception:
+                pass
+        else:
+            if self._replace_btn:
+                self._replace_btn.setTitle_("Failed")
 
     def hide_preview(self):
         self._over_preview = False
         self.orderOut_(None)
         self._slot = None
         self._picker = None
+        self._text_view = None
+        self._scroll_view = None
+        self._original_text = None
+        self._translated_text = None
+        self._translate_btn = None
+        self._replace_btn = None
+        self._lang_popup = None
+        self._target_lang = "en"
+        self._translating = False
 
 
 class PickerEventMonitor:
@@ -1505,6 +1922,25 @@ class ClipboardPickerPanel(NSPanel):
             return
         self._hide_quicklook()
 
+    def _slot_screen_rect(self, slot_num):
+        """Return the screen rect of the SlotRowView for slot_num, or None."""
+        try:
+            content = self.contentView()
+            if content is None:
+                return None
+            target = None
+            for sub in content.subviews():
+                if getattr(sub, "slot", None) == slot_num:
+                    target = sub
+                    break
+            if target is None:
+                return None
+            # sub.frame is in content-view coords → window → screen
+            win_rect = content.convertRect_toView_(target.frame(), None)
+            return self.convertRectToScreen_(win_rect)
+        except Exception:
+            return None
+
     def _show_quicklook(self, slot_data):
         if self._closed:
             return
@@ -1512,6 +1948,8 @@ class ClipboardPickerPanel(NSPanel):
             return
         if self._quicklook is None:
             self._quicklook = QuickLookPreviewPanel.alloc().init()
+        # Pass the real on-screen rect of the hovered row so QL can align to it
+        self._quicklook._anchor_rect = self._slot_screen_rect(slot_data.get("slot"))
         self._quicklook.showForSlot_nearPanel_(slot_data, self)
 
     def _hide_quicklook(self):
