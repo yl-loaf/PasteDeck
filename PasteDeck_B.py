@@ -67,7 +67,7 @@ from quickmachotkey import quickHotKey, mask
 from quickmachotkey.constants import kVK_ANSI_V, cmdKey, optionKey, shiftKey
 
 # ---------------------------------------------------------------------------
-# Constants
+# Const
 # ---------------------------------------------------------------------------
 NUM_SLOTS = 9
 PREVIEW_LEN = 55
@@ -81,8 +81,8 @@ PANEL_WIDTH = 400
 SLOT_HEIGHT = 36
 SLOT_GAP = 3
 PANEL_PADDING = 12
-TITLE_TOP_INSET = 14  # breathing room above the title (mac-like)
-TITLE_HEIGHT = 48  # bold title + subtitle block
+TITLE_TOP_INSET = 14 
+TITLE_HEIGHT = 48 
 
 PANEL_HEIGHT = (
     TITLE_TOP_INSET
@@ -99,7 +99,7 @@ MOUSE_DOWN_MASK = (1 << 1) | (1 << 3) | (1 << 25)
 ESCAPE_KEYCODE = 53
 DEFAULT_SENSITIVE_EXPIRE_SECONDS = 45
 
-# Quick Look floating preview
+
 QL_MAX_WIDTH = 520
 QL_MAX_HEIGHT = 420
 QL_MIN_WIDTH = 280
@@ -111,7 +111,7 @@ _previous_app = None
 _settings_window = None
 
 # ---------------------------------------------------------------------------
-# Settings
+# settings
 # ---------------------------------------------------------------------------
 DEFAULT_SETTINGS = {
     "sensitive_expire_seconds": DEFAULT_SENSITIVE_EXPIRE_SECONDS,
@@ -141,7 +141,7 @@ def save_settings(settings: dict) -> None:
         pass
 
 # ---------------------------------------------------------------------------
-# Sensitive-source detection (tightened – no browsers, URLs excluded)
+# detection for sensitive stuff
 # ---------------------------------------------------------------------------
 SENSITIVE_BUNDLE_IDS = {
     "com.1password.1password",
@@ -178,7 +178,7 @@ def looks_like_secret(text: str) -> bool:
     text = text.strip()
     length = len(text)
 
-    # Explicitly reject URLs
+    # reject url
     if text.lower().startswith(("http://", "https://", "ftp://", "www.")):
         return False
     if is_url(text):
@@ -212,7 +212,7 @@ def looks_like_secret(text: str) -> bool:
     return True
 
 # ---------------------------------------------------------------------------
-# Helpers
+# helpers
 # ---------------------------------------------------------------------------
 def remember_frontmost_app():
     global _previous_app
@@ -222,7 +222,7 @@ def remember_frontmost_app():
         if current and current.bundleIdentifier() != our:
             _previous_app = current
         else:
-            # Prefer the most recent non-hidden regular app
+            # most recent non hidden app
             candidates = [
                 app for app in NSWorkspace.sharedWorkspace().runningApplications()
                 if (app.activationPolicy() == 0
@@ -237,9 +237,8 @@ def restore_frontmost_app():
     global _previous_app
     if _previous_app is not None:
         try:
-            # Force activation even if the process is still around
             _previous_app.activateWithOptions_(1 << 1)  # NSApplicationActivateIgnoringOtherApps
-            time.sleep(0.05)  # tiny settle
+            time.sleep(0.05)  # settle
         except Exception:
             pass
         _previous_app = None
@@ -356,11 +355,11 @@ def simulate_paste() -> None:
     )
 
     restore_frontmost_app()
-    # Give the target app more time after long uptime / sleep
-    time.sleep(0.45)
+    # give app time to settle
+    time.sleep(0.3)
 
     try:
-        # Preferred: pure CGEvent (no System Events dependency)
+        # use CGEvent for reliability
         source = Quartz.CGEventSourceCreate(0)  # kCGEventSourceStateHIDSystemState
         key_down = CGEventCreateKeyboardEvent(source, 9, True)   # 'v' = 9
         key_up   = CGEventCreateKeyboardEvent(source, 9, False)
@@ -369,7 +368,7 @@ def simulate_paste() -> None:
         CGEventPost(kCGHIDEventTap, key_down)
         CGEventPost(kCGHIDEventTap, key_up)
     except Exception:
-        # Fallback to AppleScript only if CGEvent fails
+        # fallback to applescript 
         try:
             subprocess.run(
                 ["osascript", "-e",
@@ -427,7 +426,7 @@ def minimize_terminal_window() -> None:
     try:
         from AppKit import NSRunningApplication
         
-        # List of possible terminal bundle IDs
+        # list of terminal id
         terminal_bundle_ids = [
             "com.apple.Terminal",
             "com.googlecode.iterm2",
@@ -439,7 +438,7 @@ def minimize_terminal_window() -> None:
             if apps:
                 for app in apps:
                     try:
-                        # Hide the app, which minimizes its windows
+                        # hiding app
                         app.hide()
                         print(f"[DEBUG] Minimized {bundle_id}")
                         return
@@ -451,7 +450,7 @@ def minimize_terminal_window() -> None:
         print(f"[DEBUG] Failed to minimize terminal: {e}")
 
 # ---------------------------------------------------------------------------
-# Store
+# store
 # ---------------------------------------------------------------------------
 class ClipboardStore:
     def __init__(self, settings: dict | None = None) -> None:
@@ -831,7 +830,7 @@ class QuickLookPreviewPanel(NSPanel):
         image_hash = slot_data.get("image_hash")
 
         radius = 10.0
-        # Content container with vibrancy + clean rounded mask (no black rim)
+        # content container with vibrancy + clean rounded mask (no black rim)
         content = QuickLookHoverView.alloc().initWithFrame_onHover_(
             NSMakeRect(0, 0, QL_MIN_WIDTH, 120),
             self._on_preview_hover,
@@ -840,7 +839,7 @@ class QuickLookPreviewPanel(NSPanel):
         content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
         content.setState_(NSVisualEffectStateActive)
         content.setWantsLayer_(True)
-        # Keep HUD dark so the light text stays readable in system light mode
+        # keeping HUD dark so the light text stays readable in system light mode
         content.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
 
         try:
@@ -940,11 +939,11 @@ class QuickLookPreviewPanel(NSPanel):
             height = swatch_size + 28 + 2 * QL_PADDING
 
         else:
-            # Long text / JSON / URL – readable expanded popup
+            # readable expanded popup
             display = text
             if not display and kind != "image":
                 display = "(empty)"
-            # Pretty-print JSON when possible
+            # pretty-print json whenever possible
             stripped = display.strip()
             if (stripped.startswith("{") and stripped.endswith("}")) or (
                 stripped.startswith("[") and stripped.endswith("]")
@@ -959,14 +958,14 @@ class QuickLookPreviewPanel(NSPanel):
         self.setContentView_(content)
         self.setContentSize_(NSMakeSize(width, height))
 
-        # Position to the right of the picker (or left if no room)
+        # position to the right of the picker (or left if no room)
         pf = picker_panel.frame()
         screen = NSScreen.mainScreen().visibleFrame()
         ql_x = pf.origin.x + pf.size.width + 10
         if ql_x + width > screen.origin.x + screen.size.width - 8:
             ql_x = pf.origin.x - width - 10
         ql_y = pf.origin.y + pf.size.height - height
-        # Keep on screen vertically
+        # keep on screen vertically
         if ql_y < screen.origin.y + 8:
             ql_y = screen.origin.y + 8
         if ql_y + height > screen.origin.y + screen.size.height - 8:
@@ -984,14 +983,14 @@ class QuickLookPreviewPanel(NSPanel):
 
     def _add_text_preview(self, content, text: str):
         """Add a scrollable text view; return (width, height)."""
-        # Cap display length for sanity
+        # Cap display length for sanity lol
         max_chars = 12000
         if len(text) > max_chars:
             text = text[:max_chars] + "\n… (truncated)"
 
-        # Estimate size
+        # estimate size
         lines = text.count("\n") + 1
-        # Prefer wider for long lines
+        # prefer wider for long lines
         longest = max((len(ln) for ln in text.splitlines()), default=20)
         est_w = min(QL_MAX_WIDTH, max(QL_MIN_WIDTH, min(longest * 7 + 2 * QL_PADDING, QL_MAX_WIDTH)))
         est_h = min(QL_MAX_HEIGHT, max(100, min(lines * 18 + 2 * QL_PADDING, QL_MAX_HEIGHT)))
@@ -1471,7 +1470,7 @@ class ClipboardPickerPanel(NSPanel):
             if self._hovered_slot == slot:
                 self._hovered_slot = None
                 self._hovered_data = None
-                # Delay hide so the user can move into the preview window
+                # delay hide so the user can move into the preview window
                 self._schedule_hide_quicklook()
 
     def on_quicklook_hover(self, entered):
@@ -1479,13 +1478,11 @@ class ClipboardPickerPanel(NSPanel):
         if entered:
             self._cancel_hide_quicklook()
         else:
-            # Left the preview – hide unless still over a slot row
             if self._hovered_slot is None:
                 self._schedule_hide_quicklook()
 
     def _schedule_hide_quicklook(self):
         self._cancel_hide_quicklook()
-        # NSTimer fires on the main run-loop (AppKit-safe)
         from Foundation import NSTimer
         self._ql_hide_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             0.18, self, "hideQuickLookIfIdle:", None, False
@@ -1502,7 +1499,6 @@ class ClipboardPickerPanel(NSPanel):
 
     def hideQuickLookIfIdle_(self, _timer):
         self._ql_hide_timer = None
-        # Still over a slot or the preview? Keep it.
         if self._hovered_slot is not None:
             return
         if self._quicklook is not None and self._quicklook.is_mouse_over():
@@ -1512,7 +1508,6 @@ class ClipboardPickerPanel(NSPanel):
     def _show_quicklook(self, slot_data):
         if self._closed:
             return
-        # Skip empty slots
         if not slot_data.get("text") and not slot_data.get("image_hash") and slot_data.get("kind") != "color":
             return
         if self._quicklook is None:
@@ -1533,7 +1528,6 @@ class ClipboardPickerPanel(NSPanel):
         self.makeKeyAndOrderFront_(None)
 
     def _build_content(self):
-        # Native macOS vibrancy / acrylic blur (Spotlight / Raycast style)
         content = NSVisualEffectView.alloc().initWithFrame_(
             NSMakeRect(0, 0, PANEL_WIDTH, PANEL_HEIGHT)
         )
@@ -1541,12 +1535,9 @@ class ClipboardPickerPanel(NSPanel):
         content.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
         content.setState_(NSVisualEffectStateActive)
         content.setWantsLayer_(True)
-        # Keep HUD dark so light text stays readable in system light mode
         content.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
 
         radius = 12.0
-        # Prefer maskImage for clean rounded corners (no black rim).
-        # Falls back to layer cornerRadius if anything goes wrong.
         try:
             from AppKit import NSBezierPath, NSEdgeInsetsMake, NSImageResizingModeStretch
             mask = NSImage.alloc().initWithSize_((radius * 2, radius * 2))
@@ -1570,7 +1561,6 @@ class ClipboardPickerPanel(NSPanel):
             layer.setBorderWidth_(0.0)
             layer.setBorderColor_(NSColor.clearColor().CGColor())
 
-        # Bold title + subtitle, inset from the top for a more mac-like feel
         title_y = PANEL_HEIGHT - TITLE_TOP_INSET - 22
         title = NSTextField.alloc().initWithFrame_(
             NSMakeRect(14, title_y, PANEL_WIDTH - 54, 22)
@@ -1613,7 +1603,6 @@ class ClipboardPickerPanel(NSPanel):
         close_btn.addTrackingArea_(tracking)
         content.addSubview_(close_btn)
 
-        # Slots start below the title block with a little extra gap
         content_top = PANEL_HEIGHT - TITLE_TOP_INSET - TITLE_HEIGHT - 4
         for i, slot_data in enumerate(self.store.snapshot()):
             row_y = content_top - (i + 1) * SLOT_HEIGHT - i * SLOT_GAP
@@ -1737,7 +1726,7 @@ class SettingsWindowController(NSObject):
         content = NSView.alloc().initWithFrame_(frame)
         settings = self.app.store.settings
 
-        # --- Header ---
+        # --- header ---
         header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 48, width - 40, 24))
         header.setStringValue_("Preferences")
         header.setBezeled_(False)
@@ -1757,7 +1746,7 @@ class SettingsWindowController(NSObject):
         desc.setTextColor_(NSColor.secondaryLabelColor())
         content.addSubview_(desc)
 
-        # --- Sensitive expire ---
+        # --- sensitive expire ---
         expire_title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 110, 200, 18))
         expire_title.setStringValue_("Sensitive auto-expire")
         expire_title.setBezeled_(False)
@@ -1803,7 +1792,7 @@ class SettingsWindowController(NSObject):
         content.addSubview_(self._expire_popup)
         self._update_expire_label(current)
 
-        # --- Notifications ---
+        # --- notifications ---
         notify_title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 210, 200, 18))
         notify_title.setStringValue_("Notifications")
         notify_title.setBezeled_(False)
@@ -1823,7 +1812,7 @@ class SettingsWindowController(NSObject):
         self._notify_btn.setAction_("notifyChanged:")
         content.addSubview_(self._notify_btn)
 
-        # --- Footer actions ---
+        # --- footer actions ---
         save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(width - 110, 20, 90, 32))
         save_btn.setTitle_("Save")
         save_btn.setBezelStyle_(1)  # rounded
@@ -1889,9 +1878,6 @@ class MultiClipboardApp(rumps.App):
         self._open_picker_requested = False
         self._settings_controller = None
 
-        # Refined menu-bar dropdown when the icon is clicked:
-        # bold, larger white "PasteDeck" title. Use a no-op callback so the
-        # item stays enabled (full white) instead of the grey disabled look.
         def _title_noop(_):
             pass
 
@@ -1985,7 +1971,6 @@ def main() -> None:
     store = ClipboardStore(settings)
     app = MultiClipboardApp(store)
 
-    # Minimize terminal window at startup
     threading.Timer(0.5, minimize_terminal_window).start()
 
     app.run()
