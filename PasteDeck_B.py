@@ -63,7 +63,7 @@ from AppKit import (
     NSWindowStyleMaskMiniaturizable,
     NSWorkspace,
 )
-from Foundation import NSData, NSObject
+from Foundation import NSData, NSObject, NSAttributedString, NSMutableAttributedString, NSMakeRange
 from quickmachotkey import quickHotKey, mask
 from quickmachotkey.constants import kVK_ANSI_V, cmdKey, optionKey, shiftKey
 
@@ -394,6 +394,409 @@ def read_text_preview(path: Path, max_bytes: int = 48_000) -> str | None:
         return None
 
 
+
+# ---------------------------------------------------------------------------
+# Lightweight syntax highlighting for Quick Look code previews
+# ---------------------------------------------------------------------------
+_EXT_TO_LANG = {
+    ".py": "python", ".pyw": "python",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".ts": "typescript", ".tsx": "typescript", ".jsx": "javascript",
+    ".json": "json",
+    ".css": "css", ".scss": "css", ".less": "css",
+    ".html": "html", ".htm": "html",
+    ".xml": "xml", ".plist": "xml", ".svg": "xml",
+    ".yaml": "yaml", ".yml": "yaml",
+    ".sh": "shell", ".bash": "shell", ".zsh": "shell", ".fish": "shell",
+    ".go": "go",
+    ".rs": "rust",
+    ".swift": "swift",
+    ".sql": "sql",
+    ".md": "markdown", ".markdown": "markdown",
+    ".c": "c", ".h": "c", ".cpp": "cpp", ".hpp": "cpp", ".cc": "cpp",
+    ".java": "java", ".kt": "kotlin",
+    ".rb": "ruby", ".php": "php",
+    ".toml": "toml", ".ini": "ini", ".cfg": "ini",
+    ".log": "log", ".txt": "text",
+}
+
+# Keyword sets (subset – enough for readable previews)
+_KEYWORDS = {
+    "python": frozenset({
+        "False", "None", "True", "and", "as", "assert", "async", "await",
+        "break", "class", "continue", "def", "del", "elif", "else", "except",
+        "finally", "for", "from", "global", "if", "import", "in", "is",
+        "lambda", "nonlocal", "not", "or", "pass", "raise", "return",
+        "try", "while", "with", "yield", "match", "case", "type",
+    }),
+    "javascript": frozenset({
+        "async", "await", "break", "case", "catch", "class", "const",
+        "continue", "debugger", "default", "delete", "do", "else", "export",
+        "extends", "finally", "for", "function", "if", "import", "in",
+        "instanceof", "let", "new", "of", "return", "static", "super",
+        "switch", "this", "throw", "try", "typeof", "var", "void", "while",
+        "with", "yield", "true", "false", "null", "undefined",
+    }),
+    "typescript": frozenset({
+        "async", "await", "break", "case", "catch", "class", "const",
+        "continue", "debugger", "default", "delete", "do", "else", "export",
+        "extends", "finally", "for", "function", "if", "import", "in",
+        "instanceof", "let", "new", "of", "return", "static", "super",
+        "switch", "this", "throw", "try", "typeof", "var", "void", "while",
+        "with", "yield", "true", "false", "null", "undefined",
+        "type", "interface", "enum", "implements", "private", "public",
+        "protected", "readonly", "as", "from", "namespace", "declare",
+        "abstract", "keyof", "infer", "never", "unknown", "any",
+    }),
+    "go": frozenset({
+        "break", "case", "chan", "const", "continue", "default", "defer",
+        "else", "fallthrough", "for", "func", "go", "goto", "if", "import",
+        "interface", "map", "package", "range", "return", "select", "struct",
+        "switch", "type", "var", "true", "false", "nil", "iota",
+    }),
+    "rust": frozenset({
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+        "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+        "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+        "self", "Self", "static", "struct", "super", "trait", "true", "type",
+        "unsafe", "use", "where", "while",
+    }),
+    "swift": frozenset({
+        "associatedtype", "class", "deinit", "enum", "extension", "fileprivate",
+        "func", "import", "init", "inout", "internal", "let", "operator",
+        "private", "protocol", "public", "rethrows", "static", "struct",
+        "subscript", "typealias", "var", "break", "case", "continue",
+        "default", "defer", "do", "else", "fallthrough", "for", "guard",
+        "if", "in", "repeat", "return", "switch", "where", "while",
+        "as", "Any", "catch", "false", "is", "nil", "super", "self",
+        "Self", "throw", "throws", "true", "try", "async", "await",
+    }),
+    "sql": frozenset({
+        "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "INSERT", "INTO",
+        "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "DROP",
+        "ALTER", "INDEX", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "ON",
+        "AS", "ORDER", "BY", "GROUP", "HAVING", "LIMIT", "OFFSET", "UNION",
+        "ALL", "DISTINCT", "NULL", "TRUE", "FALSE", "CASE", "WHEN", "THEN",
+        "ELSE", "END", "IN", "EXISTS", "BETWEEN", "LIKE", "IS", "PRIMARY",
+        "KEY", "FOREIGN", "REFERENCES", "CONSTRAINT", "DEFAULT", "WITH",
+    }),
+    "shell": frozenset({
+        "if", "then", "else", "elif", "fi", "for", "while", "do", "done",
+        "case", "esac", "function", "return", "in", "select", "until",
+        "time", "coproc", "export", "local", "readonly", "declare", "typeset",
+        "true", "false",
+    }),
+    "c": frozenset({
+        "auto", "break", "case", "char", "const", "continue", "default",
+        "do", "double", "else", "enum", "extern", "float", "for", "goto",
+        "if", "int", "long", "register", "return", "short", "signed",
+        "sizeof", "static", "struct", "switch", "typedef", "union",
+        "unsigned", "void", "volatile", "while", "_Bool", "_Complex",
+    }),
+    "cpp": frozenset({
+        "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand",
+        "bitor", "bool", "break", "case", "catch", "char", "class", "compl",
+        "const", "constexpr", "const_cast", "continue", "decltype", "default",
+        "delete", "do", "double", "dynamic_cast", "else", "enum", "explicit",
+        "export", "extern", "false", "float", "for", "friend", "goto", "if",
+        "inline", "int", "long", "mutable", "namespace", "new", "noexcept",
+        "not", "not_eq", "nullptr", "operator", "or", "or_eq", "private",
+        "protected", "public", "register", "reinterpret_cast", "return",
+        "short", "signed", "sizeof", "static", "static_assert", "static_cast",
+        "struct", "switch", "template", "this", "thread_local", "throw",
+        "true", "try", "typedef", "typeid", "typename", "union", "unsigned",
+        "using", "virtual", "void", "volatile", "wchar_t", "while", "xor",
+        "xor_eq",
+    }),
+    "java": frozenset({
+        "abstract", "assert", "boolean", "break", "byte", "case", "catch",
+        "char", "class", "const", "continue", "default", "do", "double",
+        "else", "enum", "extends", "final", "finally", "float", "for",
+        "goto", "if", "implements", "import", "instanceof", "int",
+        "interface", "long", "native", "new", "package", "private",
+        "protected", "public", "return", "short", "static", "strictfp",
+        "super", "switch", "synchronized", "this", "throw", "throws",
+        "transient", "try", "void", "volatile", "while", "true", "false",
+        "null", "var", "record", "sealed", "permits", "yield",
+    }),
+    "ruby": frozenset({
+        "BEGIN", "END", "alias", "and", "begin", "break", "case", "class",
+        "def", "defined?", "do", "else", "elsif", "end", "ensure", "false",
+        "for", "if", "in", "module", "next", "nil", "not", "or", "redo",
+        "rescue", "retry", "return", "self", "super", "then", "true",
+        "undef", "unless", "until", "when", "while", "yield",
+    }),
+    "php": frozenset({
+        "abstract", "and", "array", "as", "break", "callable", "case",
+        "catch", "class", "clone", "const", "continue", "declare", "default",
+        "do", "echo", "else", "elseif", "empty", "enddeclare", "endfor",
+        "endforeach", "endif", "endswitch", "endwhile", "extends", "final",
+        "finally", "fn", "for", "foreach", "function", "global", "goto",
+        "if", "implements", "include", "include_once", "instanceof",
+        "insteadof", "interface", "isset", "list", "match", "namespace",
+        "new", "or", "print", "private", "protected", "public", "readonly",
+        "require", "require_once", "return", "static", "switch", "throw",
+        "trait", "try", "unset", "use", "var", "while", "xor", "yield",
+        "true", "false", "null",
+    }),
+    "kotlin": frozenset({
+        "as", "break", "class", "continue", "do", "else", "false", "for",
+        "fun", "if", "in", "interface", "is", "null", "object", "package",
+        "return", "super", "this", "throw", "true", "try", "typealias",
+        "typeof", "val", "var", "when", "while", "by", "catch", "constructor",
+        "delegate", "dynamic", "field", "file", "finally", "get", "import",
+        "init", "param", "property", "receiver", "set", "setparam", "where",
+        "actual", "abstract", "annotation", "companion", "const", "crossinline",
+        "data", "enum", "expect", "external", "final", "infix", "inline",
+        "inner", "internal", "lateinit", "noinline", "open", "operator",
+        "out", "override", "private", "protected", "public", "reified",
+        "sealed", "suspend", "tailrec", "vararg",
+    }),
+}
+
+# Token patterns: (name, regex, flags) – applied in order; first match wins per position
+_TOKEN_RES = {
+    "python": [
+        ("comment", re.compile(r"#.*?$", re.M)),
+        ("string", re.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+\.?\d*(?:[eE][+-]?\d+)?)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["python"], key=len, reverse=True)) + r")\b")),
+        ("decorator", re.compile(r"@\w+")),
+    ],
+    "javascript": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'(`(?:\\.|[^`\\])*`|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+\.?\d*(?:[eE][+-]?\d+)?)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["javascript"], key=len, reverse=True)) + r")\b")),
+    ],
+    "typescript": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'(`(?:\\.|[^`\\])*`|"[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|0[bB][01]+|0[oO][0-7]+|\d+\.?\d*(?:[eE][+-]?\d+)?)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["typescript"], key=len, reverse=True)) + r")\b")),
+    ],
+    "json": [
+        ("string", re.compile(r'"(?:\\.|[^"\\])*"')),
+        ("number", re.compile(r"-?\b\d+\.?\d*(?:[eE][+-]?\d+)?\b")),
+        ("keyword", re.compile(r"\b(?:true|false|null)\b")),
+    ],
+    "css": [
+        ("comment", re.compile(r"/\*[\s\S]*?\*/")),
+        ("string", re.compile(r'("[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')')),
+        ("number", re.compile(r"\b\d+\.?\d*(?:px|em|rem|%|vh|vw|pt|s|ms)?\b")),
+        ("keyword", re.compile(r"@\w+|\b(?:important|from|to)\b")),
+        ("property", re.compile(r"(?<=[\s{;])[a-zA-Z-]+(?=\s*:)")),
+    ],
+    "html": [
+        ("comment", re.compile(r"<!--[\s\S]*?-->")),
+        ("string", re.compile(r'("[^"]*"|\'[^\']*\')')),
+        ("tag", re.compile(r"</?[a-zA-Z][\w:-]*|/?>")),
+        ("attr", re.compile(r"\b[a-zA-Z_:][\w:.-]*(?=\s*=)")),
+    ],
+    "xml": [
+        ("comment", re.compile(r"<!--[\s\S]*?-->")),
+        ("string", re.compile(r'("[^"]*"|\'[^\']*\')')),
+        ("tag", re.compile(r"</?[a-zA-Z][\w:-]*|/?>")),
+        ("attr", re.compile(r"\b[a-zA-Z_:][\w:.-]*(?=\s*=)")),
+    ],
+    "yaml": [
+        ("comment", re.compile(r"#.*?$", re.M)),
+        ("string", re.compile(r'("[^"\\]*(?:\\.[^"\\]*)*"|\'[^\'\\]*(?:\\.[^\'\\]*)*\')')),
+        ("number", re.compile(r"\b\d+\.?\d*\b")),
+        ("keyword", re.compile(r"\b(?:true|false|null|yes|no|on|off)\b", re.I)),
+        ("key", re.compile(r"^[ \t]*[A-Za-z_][\w-]*(?=\s*:)", re.M)),
+    ],
+    "shell": [
+        ("comment", re.compile(r"(?<![\\$])#.*?$", re.M)),
+        ("string", re.compile(r'("[^"\\]*(?:\\.[^"\\]*)*"|\'[^\']*\')')),
+        ("number", re.compile(r"\b\d+\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["shell"], key=len, reverse=True)) + r")\b")),
+        ("var", re.compile(r"\$\{?\w+\}?|\$\d+")),
+    ],
+    "go": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'(`[^`]*`|"[^"\\]*(?:\\.[^"\\]*)*")')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|\d+\.?\d*)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["go"], key=len, reverse=True)) + r")\b")),
+    ],
+    "rust": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'(?:r#*"[^"]*"#*|"[^"\\]*(?:\\.[^"\\]*)*")')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F_]+|\d[\d_]*(?:\.\d[\d_]*)?)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["rust"], key=len, reverse=True)) + r")\b")),
+        ("macro", re.compile(r"\b\w+!")),
+    ],
+    "swift": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'("""[\s\S]*?"""|"[^"\\]*(?:\\.[^"\\]*)*")')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|\d+\.?\d*)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["swift"], key=len, reverse=True)) + r")\b")),
+    ],
+    "sql": [
+        ("comment", re.compile(r"--.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r"(\'[^\']*\'|\"[^\"]*\")")),
+        ("number", re.compile(r"\b\d+\.?\d*\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["sql"], key=len, reverse=True)) + r")\b", re.I)),
+    ],
+    "c": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|\d+\.?\d*)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["c"], key=len, reverse=True)) + r")\b")),
+        ("preprocessor", re.compile(r"^[ \t]*#\w+.*$", re.M)),
+    ],
+    "cpp": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|\d+\.?\d*)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["cpp"], key=len, reverse=True)) + r")\b")),
+        ("preprocessor", re.compile(r"^[ \t]*#\w+.*$", re.M)),
+    ],
+    "java": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|\d+\.?\d*)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["java"], key=len, reverse=True)) + r")\b")),
+    ],
+    "ruby": [
+        ("comment", re.compile(r"#.*?$", re.M)),
+        ("string", re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|%[qQwW]?[(\[{<].*?[)\]}>])')),
+        ("number", re.compile(r"\b\d+\.?\d*\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["ruby"], key=len, reverse=True)) + r")\b")),
+        ("symbol", re.compile(r":\w+")),
+    ],
+    "php": [
+        ("comment", re.compile(r"//.*?$|#.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')')),
+        ("number", re.compile(r"\b\d+\.?\d*\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["php"], key=len, reverse=True)) + r")\b")),
+        ("var", re.compile(r"\$\w+")),
+    ],
+    "kotlin": [
+        ("comment", re.compile(r"//.*?$|/\*[\s\S]*?\*/", re.M)),
+        ("string", re.compile(r'("""[\s\S]*?"""|"(?:\\.|[^"\\])*")')),
+        ("number", re.compile(r"\b(?:0[xX][0-9a-fA-F]+|\d+\.?\d*)\b")),
+        ("keyword", re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(_KEYWORDS["kotlin"], key=len, reverse=True)) + r")\b")),
+    ],
+    "markdown": [
+        ("heading", re.compile(r"^#{1,6}\s+.*$", re.M)),
+        ("code", re.compile(r"```[\s\S]*?```|`[^`]+`")),
+        ("link", re.compile(r"\[([^\]]+)\]\([^)]+\)")),
+        ("bold", re.compile(r"\*\*[^*]+\*\*|__[^_]+__")),
+        ("italic", re.compile(r"(?<!\*)\*[^*]+\*(?!\*)|(?<!_)_[^_]+_(?!_)")),
+    ],
+    "toml": [
+        ("comment", re.compile(r"#.*?$", re.M)),
+        ("string", re.compile(r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'|"[^"]*"|\'[^\']*\')')),
+        ("number", re.compile(r"\b\d+\.?\d*\b")),
+        ("keyword", re.compile(r"\b(?:true|false)\b")),
+        ("key", re.compile(r"^[ \t]*[A-Za-z_][\w.-]*(?=\s*=)", re.M)),
+        ("section", re.compile(r"^\[[^\]]+\]", re.M)),
+    ],
+    "ini": [
+        ("comment", re.compile(r"[#;].*?$", re.M)),
+        ("string", re.compile(r'("[^"]*"|\'[^\']*\')')),
+        ("section", re.compile(r"^\[[^\]]+\]", re.M)),
+        ("key", re.compile(r"^[ \t]*[A-Za-z_][\w.-]*(?=\s*=)", re.M)),
+    ],
+    "log": [
+        ("keyword", re.compile(r"\b(?:ERROR|WARN(?:ING)?|INFO|DEBUG|CRITICAL|FATAL|TRACE)\b", re.I)),
+        ("number", re.compile(r"\b\d+\b")),
+        ("string", re.compile(r'"[^"]*"')),
+    ],
+}
+
+# Alias languages that share rules
+for _alias, _base in (("c", "c"), ("cpp", "cpp")):
+    pass  # already defined
+
+
+def _syntax_colors():
+    """Dark theme colors matching the glass Quick Look panel."""
+    return {
+        "default": NSColor.colorWithCalibratedWhite_alpha_(0.90, 1.0),
+        "keyword": NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.45, 0.95, 1.0),   # purple
+        "string":  NSColor.colorWithCalibratedRed_green_blue_alpha_(0.55, 0.82, 0.45, 1.0),   # green
+        "comment": NSColor.colorWithCalibratedWhite_alpha_(0.48, 1.0),                        # muted
+        "number":  NSColor.colorWithCalibratedRed_green_blue_alpha_(0.40, 0.78, 0.95, 1.0),   # cyan
+        "decorator": NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.75, 0.35, 1.0), # gold
+        "tag":     NSColor.colorWithCalibratedRed_green_blue_alpha_(0.45, 0.70, 0.98, 1.0),   # blue
+        "attr":    NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.70, 0.40, 1.0),   # orange
+        "property": NSColor.colorWithCalibratedRed_green_blue_alpha_(0.55, 0.82, 0.95, 1.0),
+        "key":     NSColor.colorWithCalibratedRed_green_blue_alpha_(0.55, 0.82, 0.95, 1.0),
+        "var":     NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.70, 0.40, 1.0),
+        "macro":   NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.75, 0.35, 1.0),
+        "preprocessor": NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.45, 0.95, 1.0),
+        "heading": NSColor.colorWithCalibratedRed_green_blue_alpha_(0.55, 0.82, 0.95, 1.0),
+        "code":    NSColor.colorWithCalibratedRed_green_blue_alpha_(0.55, 0.82, 0.45, 1.0),
+        "link":    NSColor.colorWithCalibratedRed_green_blue_alpha_(0.45, 0.70, 0.98, 1.0),
+        "bold":    NSColor.colorWithCalibratedWhite_alpha_(0.95, 1.0),
+        "italic":  NSColor.colorWithCalibratedWhite_alpha_(0.85, 1.0),
+        "section": NSColor.colorWithCalibratedRed_green_blue_alpha_(0.78, 0.45, 0.95, 1.0),
+        "symbol":  NSColor.colorWithCalibratedRed_green_blue_alpha_(0.95, 0.70, 0.40, 1.0),
+    }
+
+
+def language_from_extension(ext: str) -> str | None:
+    """Map file extension to highlighter language id."""
+    if not ext:
+        return None
+    return _EXT_TO_LANG.get(ext.lower())
+
+
+def syntax_highlight(text: str, language: str | None) -> NSAttributedString:
+    """Return an NSAttributedString with basic syntax coloring for *language*.
+
+    Falls back to plain monospaced text when language is unknown or highlighting fails.
+    """
+    from Foundation import NSMakeRange
+
+    font = NSFont.monospacedSystemFontOfSize_weight_(12, 0.3)
+    colors = _syntax_colors()
+    default_color = colors["default"]
+
+    attr = NSMutableAttributedString.alloc().initWithString_(text)
+    try:
+        length = len(text)
+        attr.addAttribute_value_range_("NSFont", font, NSMakeRange(0, length))
+        attr.addAttribute_value_range_(
+            "NSColor", default_color, NSMakeRange(0, length)
+        )
+    except Exception:
+        return attr
+
+    if not language:
+        return attr
+
+    rules = _TOKEN_RES.get(language)
+    if not rules:
+        return attr
+
+    # Collect non-overlapping matches (first match wins per span)
+    occupied: list[tuple[int, int]] = []
+
+    def is_free(start: int, end: int) -> bool:
+        for a, b in occupied:
+            if start < b and end > a:
+                return False
+        return True
+
+    try:
+        for kind, pattern in rules:
+            color = colors.get(kind, default_color)
+            for m in pattern.finditer(text):
+                s, e = m.start(), m.end()
+                if e <= s or not is_free(s, e):
+                    continue
+                occupied.append((s, e))
+                attr.addAttribute_value_range_(
+                    "NSColor", color, NSMakeRange(s, e - s)
+                )
+    except Exception:
+        pass
+    return attr
+
+
 def detect_language(text: str) -> str | None:
     """Apple NaturalLanguage framework – dominant language BCP-47 tag."""
     if not text or not text.strip():
@@ -566,6 +969,7 @@ def read_pasteboard() -> dict:
     result = {
         "text": pb.stringForType_(NSPasteboardTypeString),
         "rtf": None, "html": None, "image": None,
+        "file_paths": [],
         "changeCount": pb.changeCount(),
         "bundle_id": get_frontmost_bundle_id(),
     }
@@ -575,6 +979,42 @@ def read_pasteboard() -> dict:
     html_data = pb.dataForType_(NSPasteboardTypeHTML)
     if html_data:
         result["html"] = bytes(html_data)
+
+    # File paths from Finder (and similar) – prefer these over incidental icons
+    paths: list[str] = []
+    try:
+        # Classic filenames pasteboard type
+        filenames = pb.propertyListForType_("NSFilenamesPboardType")
+        if filenames:
+            for p in filenames:
+                if isinstance(p, str) and p:
+                    paths.append(p)
+    except Exception:
+        pass
+    if not paths:
+        try:
+            from Foundation import NSURL
+            urls = pb.readObjectsForClasses_options_([NSURL], None)
+            if urls:
+                for u in urls:
+                    try:
+                        if u.isFileURL():
+                            p = u.path()
+                            if p:
+                                paths.append(str(p))
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    # Deduplicate while preserving order
+    seen = set()
+    uniq = []
+    for p in paths:
+        if p not in seen:
+            seen.add(p)
+            uniq.append(p)
+    result["file_paths"] = uniq
+
     for t in (NSPasteboardTypePNG, NSPasteboardTypeTIFF, "public.png", "public.tiff"):
         data = pb.dataForType_(t)
         if data:
@@ -829,11 +1269,74 @@ class ClipboardStore:
         bundle_id = pb_data.get("bundle_id")
         sensitive = is_sensitive_source(bundle_id)
 
+        # Prefer real file paths from Finder over incidental icon/thumbnail image data.
+        # When you copy a .py (or any non-image) file, macOS often also puts the
+        # file icon as TIFF/PNG on the pasteboard – that must not win.
+        file_paths = pb_data.get("file_paths") or []
+        preferred_path = None
+        for p in file_paths:
+            try:
+                path = Path(p)
+                if path.is_file():
+                    preferred_path = path
+                    break
+            except Exception:
+                continue
+
+        if preferred_path is not None:
+            ext = preferred_path.suffix.lower()
+            if ext not in IMAGE_PREVIEW_EXTS:
+                # Non-image file → store as path text so Quick Look can show content
+                text = str(preferred_path)
+                rtf = None
+                html = None
+                if not sensitive and looks_like_secret(text):
+                    # looks_like_secret already rejects paths, but keep the guard
+                    sensitive = True
+                kind, color, url_title = self._classify(text)
+                has_style = False
+                with self._lock:
+                    self._slots = [
+                        s for s in self._slots
+                        if not (not s["pinned"] and s["kind"] != "image"
+                                and s["text"] == text)
+                    ]
+                    unpinned = [s for s in self._slots if not s["pinned"]]
+                    pinned = [s for s in self._slots if s["pinned"]]
+                    new_entry = {
+                        "text": text,
+                        "rtf": None,
+                        "html": None,
+                        "pinned": False, "kind": kind, "image_hash": None,
+                        "color": color, "url_title": url_title,
+                        "has_style": False,
+                        "sensitive": sensitive, "created_at": time.time(),
+                    }
+                    unpinned.insert(0, new_entry)
+                    unpinned = unpinned[: NUM_SLOTS - len(pinned)]
+                    new_slots = [self._empty_slot() for _ in range(NUM_SLOTS)]
+                    for i, p in enumerate(pinned):
+                        if i < NUM_SLOTS:
+                            new_slots[i] = p
+                    free = len(pinned)
+                    for u in unpinned:
+                        if free >= NUM_SLOTS:
+                            break
+                        new_slots[free] = u
+                        free += 1
+                    self._slots = new_slots
+                self.save()
+                return
+            # else: image file from Finder – fall through and use the image data if present
+
         if pb_data.get("image") is not None:
             self._push_image(pb_data["image"], sensitive=sensitive)
             return
 
         text = (pb_data.get("text") or "").strip()
+        # If pasteboard text is empty but we somehow have a path, use it
+        if not text and preferred_path is not None:
+            text = str(preferred_path)
         rtf = pb_data.get("rtf")
         html = pb_data.get("html")
         if not text and not rtf and not html:
@@ -1307,7 +1810,8 @@ class QuickLookPreviewPanel(NSPanel):
                                 pass
                         header = f"📄 {file_path.name}"
                         display = f"{header}\n{'─' * min(40, len(header) + 4)}\n{body}"
-                        width, height = self._add_text_preview(content, display)
+                        lang = language_from_extension(ext)
+                        width, height = self._add_text_preview(content, display, language=lang)
                 else:
                     # unsupported extension – show icon + metadata
                     width, height = self._add_file_info_preview(content, file_path)
@@ -1318,14 +1822,16 @@ class QuickLookPreviewPanel(NSPanel):
                     display = "(empty)"
                 # pretty-print json whenever possible
                 stripped = display.strip()
+                lang = None
                 if (stripped.startswith("{") and stripped.endswith("}")) or (
                     stripped.startswith("[") and stripped.endswith("]")
                 ):
                     try:
                         display = json.dumps(json.loads(stripped), indent=2, ensure_ascii=False)
+                        lang = "json"
                     except Exception:
                         pass
-                width, height = self._add_text_preview(content, display)
+                width, height = self._add_text_preview(content, display, language=lang)
 
         content.setFrame_(NSMakeRect(0, 0, width, height))
         self.setContentView_(content)
@@ -1555,8 +2061,12 @@ class QuickLookPreviewPanel(NSPanel):
         height = icon_size + 50 + 2 * QL_PADDING
         return width, height
 
-    def _add_text_preview(self, content, text: str):
-        """Add a scrollable text view + liquid-glass controls; return (width, height)."""
+    def _add_text_preview(self, content, text: str, language: str | None = None):
+        """Add a scrollable text view + liquid-glass controls; return (width, height).
+
+        When *language* is set (e.g. from a code file extension), apply syntax
+        highlighting so keywords, strings, and comments appear coloured.
+        """
         max_chars = 12000
         if len(text) > max_chars:
             text = text[:max_chars] + "\n… (truncated)"
@@ -1586,13 +2096,23 @@ class QuickLookPreviewPanel(NSPanel):
             pass
 
         tv = NSTextView.alloc().initWithFrame_(scroll.contentView().bounds())
-        tv.setString_(text)
+        use_highlight = bool(language) and language not in (None, "text")
+        if use_highlight:
+            try:
+                attr = syntax_highlight(text, language)
+                tv.textStorage().setAttributedString_(attr)
+            except Exception:
+                tv.setString_(text)
+                tv.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0.3))
+                tv.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.92, 1.0))
+        else:
+            tv.setString_(text)
+            tv.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0.3)
+                        if text.lstrip().startswith(("{", "["))
+                        else NSFont.systemFontOfSize_(13))
+            tv.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.92, 1.0))
         tv.setEditable_(False)
         tv.setSelectable_(True)
-        tv.setFont_(NSFont.monospacedSystemFontOfSize_weight_(12, 0.3)
-                    if text.lstrip().startswith(("{", "["))
-                    else NSFont.systemFontOfSize_(13))
-        tv.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.92, 1.0))
         tv.setBackgroundColor_(NSColor.clearColor())
         tv.setDrawsBackground_(False)
         tv.setVerticallyResizable_(True)
@@ -2835,13 +3355,13 @@ class MultiClipboardApp(rumps.App):
         header = rumps.MenuItem("PasteDeck", callback=_title_noop)
         try:
             from Foundation import NSAttributedString, NSMutableDictionary
-            from AppKit import NSFontAttributeName, NSForegroundColorAttributeName
+            from AppKit import NSFont, NSColor
             attrs = NSMutableDictionary.dictionary()
             attrs.setObject_forKey_(
-                NSFont.boldSystemFontOfSize_(15), NSFontAttributeName
+                NSFont.boldSystemFontOfSize_(15), "NSFont"
             )
             attrs.setObject_forKey_(
-                NSColor.whiteColor(), NSForegroundColorAttributeName
+                NSColor.whiteColor(), "NSColor"
             )
             attributed = NSAttributedString.alloc().initWithString_attributes_(
                 "PasteDeck", attrs
