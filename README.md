@@ -44,7 +44,7 @@ And run this ```.sh``` code:
 chmod +x install_pastedeck.sh
 ./install_pastedeck.sh
 ```
-if this doesnt work, run this instead:
+if that doesnt work, run this instead:
 ```bash
 sh <path_to_file>
 ```
