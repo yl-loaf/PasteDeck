@@ -71,8 +71,9 @@ from quickmachotkey.constants import kVK_ANSI_V, cmdKey, optionKey, shiftKey
 # Const
 # ---------------------------------------------------------------------------
 NUM_SLOTS = 9
-PREVIEW_LEN = 55
-TOOLTIP_LEN = 800
+PREVIEW_LEN = 55          # legacy default; settings slot_preview_max_len overrides (0 = unlimited)
+TOOLTIP_LEN = 800         # legacy default; settings tooltip_max_len overrides (0 = unlimited)
+DEFAULT_CODE_PREVIEW_BYTES = 0  # 0 = no truncation for code/text file previews
 DATA_FILE = Path.home() / ".multi-clipboard.json"
 SETTINGS_FILE = Path.home() / ".pastedeck-settings.json"
 CACHE_DIR = Path.home() / ".multi-clipboard-cache"
@@ -115,9 +116,21 @@ _settings_window = None
 # settings
 # ---------------------------------------------------------------------------
 DEFAULT_SETTINGS = {
+    # Privacy
+    "detect_sensitive": False,          # off by default – no password-manager / entropy flagging
     "sensitive_expire_seconds": DEFAULT_SENSITIVE_EXPIRE_SECONDS,
     "show_notifications": True,
+    # Previews / truncation (0 = unlimited)
+    "slot_preview_max_len": 0,          # was PREVIEW_LEN (55)
+    "tooltip_max_len": 0,               # was TOOLTIP_LEN (800)
+    "code_preview_max_bytes": DEFAULT_CODE_PREVIEW_BYTES,
+    "enable_file_previews": True,
+    # Behaviour
     "poll_interval": 0.4,
+    "enable_translate": True,
+    "auto_clear_unpinned_minutes": 0,   # 0 = never
+    "show_slot_numbers": True,
+    "sound_on_paste": False,
 }
 
 
@@ -278,14 +291,32 @@ def slot_label(n: int) -> str:
 def key_to_slot(key: str) -> int | None:
     return int(key) if key in "123456789" else None
 
-def truncate(text: str, length: int = PREVIEW_LEN) -> str:
-    text = text.replace("\n", " ↵ ").replace("\t", " → ")
-    return text if len(text) <= length else text[: length - 1] + "…"
+# Runtime settings mirror (kept in sync by ClipboardStore / Settings save)
+_runtime_settings: dict = {}
 
-def tooltip_text(text: str) -> str:
+def _settings_get(key: str, default=None):
+    if key in _runtime_settings:
+        return _runtime_settings[key]
+    return DEFAULT_SETTINGS.get(key, default)
+
+def truncate(text: str, length: int | None = None) -> str:
+    """Truncate for slot-row labels. length <= 0 means unlimited."""
+    if length is None:
+        length = int(_settings_get("slot_preview_max_len", PREVIEW_LEN) or 0)
+    text = text.replace("\n", " ↵ ").replace("\t", " → ")
+    if length <= 0 or len(text) <= length:
+        return text
+    return text[: length - 1] + "…"
+
+def tooltip_text(text: str, max_len: int | None = None) -> str:
+    """Full tooltip body. max_len <= 0 means unlimited."""
     if not text:
         return "Empty slot"
-    return text if len(text) <= TOOLTIP_LEN else text[:TOOLTIP_LEN] + "…"
+    if max_len is None:
+        max_len = int(_settings_get("tooltip_max_len", TOOLTIP_LEN) or 0)
+    if max_len <= 0 or len(text) <= max_len:
+        return text
+    return text[:max_len] + "…"
 
 HEX_COLOR_RE = re.compile(r"^#?([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 URL_RE = re.compile(r"^https?://[^\s<>\"']+$", re.IGNORECASE)
@@ -371,14 +402,22 @@ def try_local_file_path(text: str) -> Path | None:
     return None
 
 
-def read_text_preview(path: Path, max_bytes: int = 48_000) -> str | None:
-    """Read a text file for Quick Look, with size and encoding safety."""
+def read_text_preview(path: Path, max_bytes: int | None = None) -> str | None:
+    """Read a text file for Quick Look, with size and encoding safety.
+
+    max_bytes <= 0 → no truncation (still respects a 10 MB hard safety cap).
+    """
     try:
         size = path.stat().st_size
         if size == 0:
             return "(empty file)"
-        if size > 2_000_000:  # hard cap
+        HARD_CAP = 10_000_000  # 10 MB absolute safety limit
+        if size > HARD_CAP:
             return f"(file too large to preview: {size:,} bytes)"
+        if max_bytes is None:
+            max_bytes = int(_settings_get("code_preview_max_bytes", 48_000) or 0)
+        if max_bytes <= 0:
+            max_bytes = size  # unlimited within hard cap
         data = path.read_bytes()[:max_bytes]
         # Detect encoding lightly
         for enc in ("utf-8", "utf-8-sig", "utf-16", "latin-1"):
@@ -1167,6 +1206,8 @@ class ClipboardStore:
         self._last_change_count = NSPasteboard.generalPasteboard().changeCount()
         self._title_cache: dict[str, str] = {}
         self.settings = settings if settings is not None else load_settings()
+        global _runtime_settings
+        _runtime_settings = dict(self.settings)
         self.load()
         self._reaper = threading.Thread(target=self._reaper_loop, daemon=True)
         self._reaper.start()
@@ -1267,7 +1308,8 @@ class ClipboardStore:
 
     def push_from_pasteboard(self, pb_data: dict) -> None:
         bundle_id = pb_data.get("bundle_id")
-        sensitive = is_sensitive_source(bundle_id)
+        detect = bool(self.settings.get("detect_sensitive", False))
+        sensitive = is_sensitive_source(bundle_id) if detect else False
 
         # Prefer real file paths from Finder over incidental icon/thumbnail image data.
         # When you copy a .py (or any non-image) file, macOS often also puts the
@@ -1290,7 +1332,7 @@ class ClipboardStore:
                 text = str(preferred_path)
                 rtf = None
                 html = None
-                if not sensitive and looks_like_secret(text):
+                if detect and not sensitive and looks_like_secret(text):
                     # looks_like_secret already rejects paths, but keep the guard
                     sensitive = True
                 kind, color, url_title = self._classify(text)
@@ -1342,7 +1384,7 @@ class ClipboardStore:
         if not text and not rtf and not html:
             return
 
-        if not sensitive and looks_like_secret(text):
+        if detect and not sensitive and looks_like_secret(text):
             sensitive = True
 
         kind, color, url_title = self._classify(text)
@@ -1758,7 +1800,11 @@ class QuickLookPreviewPanel(NSPanel):
         else:
             # File-path preview: if clipboard text points to an existing local file,
             # show image thumbnail or text content for supported extensions.
-            file_path = try_local_file_path(text)
+            file_path = (
+                try_local_file_path(text)
+                if _settings_get("enable_file_previews", True)
+                else None
+            )
             if file_path is not None:
                 ext = file_path.suffix.lower()
                 if ext in IMAGE_PREVIEW_EXTS:
@@ -3172,6 +3218,12 @@ class SettingsWindowController(NSObject):
         self._expire_popup = None
         self._notify_btn = None
         self._expire_label = None
+        self._detect_btn = None
+        self._file_preview_btn = None
+        self._translate_btn = None
+        self._slot_nums_btn = None
+        self._sound_btn = None
+        self._trunc_popup = None
         return self
 
     def show(self):
@@ -3180,7 +3232,7 @@ class SettingsWindowController(NSObject):
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             return
 
-        width, height = 420, 320
+        width, height = 440, 520
         style = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
@@ -3196,19 +3248,34 @@ class SettingsWindowController(NSObject):
 
         content = NSView.alloc().initWithFrame_(frame)
         settings = self.app.store.settings
+        y = height - 40
+
+        def _label(title, y_pos, size=13, bold=False):
+            f = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y_pos, width - 40, 18))
+            f.setStringValue_(title)
+            f.setBezeled_(False)
+            f.setDrawsBackground_(False)
+            f.setEditable_(False)
+            f.setSelectable_(False)
+            f.setFont_(NSFont.boldSystemFontOfSize_(size) if bold else NSFont.systemFontOfSize_(size))
+            content.addSubview_(f)
+            return f
+
+        def _switch(title, y_pos, state, action):
+            btn = NSButton.alloc().initWithFrame_(NSMakeRect(20, y_pos, width - 40, 24))
+            btn.setButtonType_(3)  # switch
+            btn.setTitle_(title)
+            btn.setState_(1 if state else 0)
+            btn.setTarget_(self)
+            btn.setAction_(action)
+            content.addSubview_(btn)
+            return btn
 
         # --- header ---
-        header = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 48, width - 40, 24))
-        header.setStringValue_("Preferences")
-        header.setBezeled_(False)
-        header.setDrawsBackground_(False)
-        header.setEditable_(False)
-        header.setSelectable_(False)
-        header.setFont_(NSFont.boldSystemFontOfSize_(16))
-        content.addSubview_(header)
-
-        desc = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 70, width - 40, 18))
-        desc.setStringValue_("Adjust how PasteDeck handles privacy and feedback.")
+        _label("Preferences", y, 16, bold=True)
+        y -= 22
+        desc = NSTextField.alloc().initWithFrame_(NSMakeRect(20, y, width - 40, 18))
+        desc.setStringValue_("Privacy, previews, and behaviour.")
         desc.setBezeled_(False)
         desc.setDrawsBackground_(False)
         desc.setEditable_(False)
@@ -3216,19 +3283,22 @@ class SettingsWindowController(NSObject):
         desc.setFont_(NSFont.systemFontOfSize_(11))
         desc.setTextColor_(NSColor.secondaryLabelColor())
         content.addSubview_(desc)
+        y -= 32
 
-        # --- sensitive expire ---
-        expire_title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 110, 200, 18))
-        expire_title.setStringValue_("Sensitive auto-expire")
-        expire_title.setBezeled_(False)
-        expire_title.setDrawsBackground_(False)
-        expire_title.setEditable_(False)
-        expire_title.setSelectable_(False)
-        expire_title.setFont_(NSFont.systemFontOfSize_(13))
-        content.addSubview_(expire_title)
-
+        # --- Privacy ---
+        _label("Privacy", y, 13, bold=True)
+        y -= 26
+        self._detect_btn = _switch(
+            "Detect sensitive content (password managers & secrets)",
+            y,
+            settings.get("detect_sensitive", False),
+            "detectChanged:",
+        )
+        y -= 28
+        _label("Sensitive auto-expire", y)
+        y -= 18
         self._expire_label = NSTextField.alloc().initWithFrame_(
-            NSMakeRect(20, height - 130, width - 40, 16)
+            NSMakeRect(20, y, width - 40, 16)
         )
         self._expire_label.setBezeled_(False)
         self._expire_label.setDrawsBackground_(False)
@@ -3237,9 +3307,9 @@ class SettingsWindowController(NSObject):
         self._expire_label.setFont_(NSFont.systemFontOfSize_(11))
         self._expire_label.setTextColor_(NSColor.secondaryLabelColor())
         content.addSubview_(self._expire_label)
-
+        y -= 26
         self._expire_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(20, height - 162, 200, 26), False
+            NSMakeRect(20, y, 220, 26), False
         )
         expire_options = [
             (15, "15 seconds"),
@@ -3251,7 +3321,7 @@ class SettingsWindowController(NSObject):
             (0, "Never (manual only)"),
         ]
         current = int(settings.get("sensitive_expire_seconds", DEFAULT_SENSITIVE_EXPIRE_SECONDS))
-        selected_idx = 2  # default 45s
+        selected_idx = 2
         for i, (secs, label) in enumerate(expire_options):
             self._expire_popup.addItemWithTitle_(label)
             self._expire_popup.itemAtIndex_(i).setTag_(secs)
@@ -3262,31 +3332,76 @@ class SettingsWindowController(NSObject):
         self._expire_popup.setAction_("expireChanged:")
         content.addSubview_(self._expire_popup)
         self._update_expire_label(current)
+        y -= 36
 
-        # --- notifications ---
-        notify_title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, height - 210, 200, 18))
-        notify_title.setStringValue_("Notifications")
-        notify_title.setBezeled_(False)
-        notify_title.setDrawsBackground_(False)
-        notify_title.setEditable_(False)
-        notify_title.setSelectable_(False)
-        notify_title.setFont_(NSFont.systemFontOfSize_(13))
-        content.addSubview_(notify_title)
-
-        self._notify_btn = NSButton.alloc().initWithFrame_(
-            NSMakeRect(20, height - 238, width - 40, 24)
+        # --- Previews / truncation ---
+        _label("Previews", y, 13, bold=True)
+        y -= 26
+        self._file_preview_btn = _switch(
+            "Rich file-path previews (images, code, icons)",
+            y,
+            settings.get("enable_file_previews", True),
+            "noopChanged:",
         )
-        self._notify_btn.setButtonType_(3)  # NSSwitchButton / NSButtonTypeSwitch
-        self._notify_btn.setTitle_("Show notifications for clear actions")
-        self._notify_btn.setState_(1 if settings.get("show_notifications", True) else 0)
-        self._notify_btn.setTarget_(self)
-        self._notify_btn.setAction_("notifyChanged:")
-        content.addSubview_(self._notify_btn)
+        y -= 28
+        _label("Code / text truncation", y)
+        y -= 26
+        self._trunc_popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(20, y, 280, 26), False
+        )
+        trunc_options = [
+            (0, "No truncation (full content)"),
+            (48_000, "48 KB (legacy)"),
+            (12_000, "12 KB"),
+            (4_000, "4 KB"),
+        ]
+        cur_bytes = int(settings.get("code_preview_max_bytes", 0) or 0)
+        trunc_idx = 0
+        for i, (val, label) in enumerate(trunc_options):
+            self._trunc_popup.addItemWithTitle_(label)
+            self._trunc_popup.itemAtIndex_(i).setTag_(val)
+            if val == cur_bytes:
+                trunc_idx = i
+        self._trunc_popup.selectItemAtIndex_(trunc_idx)
+        content.addSubview_(self._trunc_popup)
+        y -= 36
 
-        # --- footer actions ---
+        # --- Behaviour ---
+        _label("Behaviour", y, 13, bold=True)
+        y -= 26
+        self._translate_btn = _switch(
+            "Enable Translate in Quick Look",
+            y,
+            settings.get("enable_translate", True),
+            "noopChanged:",
+        )
+        y -= 28
+        self._slot_nums_btn = _switch(
+            "Show slot numbers in picker",
+            y,
+            settings.get("show_slot_numbers", True),
+            "noopChanged:",
+        )
+        y -= 28
+        self._sound_btn = _switch(
+            "Play sound on paste",
+            y,
+            settings.get("sound_on_paste", False),
+            "noopChanged:",
+        )
+        y -= 28
+        self._notify_btn = _switch(
+            "Show notifications for clear actions",
+            y,
+            settings.get("show_notifications", True),
+            "notifyChanged:",
+        )
+        y -= 40
+
+        # --- footer ---
         save_btn = NSButton.alloc().initWithFrame_(NSMakeRect(width - 110, 20, 90, 32))
         save_btn.setTitle_("Save")
-        save_btn.setBezelStyle_(1)  # rounded
+        save_btn.setBezelStyle_(1)
         save_btn.setKeyEquivalent_("\r")
         save_btn.setTarget_(self)
         save_btn.setAction_("saveSettings:")
@@ -3299,7 +3414,7 @@ class SettingsWindowController(NSObject):
         cancel_btn.setAction_("cancelSettings:")
         content.addSubview_(cancel_btn)
 
-        about = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 24, 180, 16))
+        about = NSTextField.alloc().initWithFrame_(NSMakeRect(20, 24, 200, 16))
         about.setStringValue_("PasteDeck  ·  local & private")
         about.setBezeled_(False)
         about.setDrawsBackground_(False)
@@ -3328,18 +3443,45 @@ class SettingsWindowController(NSObject):
         self._update_expire_label(int(tag))
 
     def notifyChanged_(self, sender):
-        pass  # state read on save
+        pass
+
+    def detectChanged_(self, sender):
+        pass
+
+    def noopChanged_(self, sender):
+        pass
 
     def saveSettings_(self, sender):
         secs = int(self._expire_popup.selectedItem().tag())
         notify = bool(self._notify_btn.state())
-        self.app.store.settings["sensitive_expire_seconds"] = secs
-        self.app.store.settings["show_notifications"] = notify
-        save_settings(self.app.store.settings)
+        detect = bool(self._detect_btn.state())
+        file_prev = bool(self._file_preview_btn.state())
+        translate = bool(self._translate_btn.state())
+        slot_nums = bool(self._slot_nums_btn.state())
+        sound = bool(self._sound_btn.state())
+        code_bytes = int(self._trunc_popup.selectedItem().tag())
+
+        s = self.app.store.settings
+        s["sensitive_expire_seconds"] = secs
+        s["show_notifications"] = notify
+        s["detect_sensitive"] = detect
+        s["enable_file_previews"] = file_prev
+        s["enable_translate"] = translate
+        s["show_slot_numbers"] = slot_nums
+        s["sound_on_paste"] = sound
+        s["code_preview_max_bytes"] = code_bytes
+        # Keep slot/tooltip unlimited unless user later adds controls
+        s["slot_preview_max_len"] = s.get("slot_preview_max_len", 0)
+        s["tooltip_max_len"] = s.get("tooltip_max_len", 0)
+
+        save_settings(s)
+        global _runtime_settings
+        _runtime_settings = dict(s)
         self.window.orderOut_(None)
 
     def cancelSettings_(self, sender):
         self.window.orderOut_(None)
+
 
 
 class MultiClipboardApp(rumps.App):
