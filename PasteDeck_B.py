@@ -173,7 +173,7 @@ def is_sensitive_source(bundle_id: str | None, app_name: str | None = None) -> b
     return False
 
 def looks_like_secret(text: str) -> bool:
-    """Strict heuristic – never flags URLs or normal text."""
+    """Strict heuristic – never flags URLs, file paths, or normal text."""
     if not text:
         return False
     text = text.strip()
@@ -185,12 +185,33 @@ def looks_like_secret(text: str) -> bool:
     if is_url(text):
         return False
 
+    # reject local file paths / path-like strings
+    # (absolute, ~, file://, multiple slashes, or extension after a slash)
+    # These often have mixed case + digits + symbols and were falsely flagged.
+    lower = text.lower()
+    if (
+        text.startswith(("/", "~"))
+        or lower.startswith("file://")
+        or text.count("/") >= 2          # e.g. /Users/…/file.py or a/b/c
+        or ("/" in text and any(lower.endswith(ext) for ext in (
+            ".py", ".js", ".ts", ".tsx", ".jsx", ".swift", ".rs", ".go",
+            ".java", ".kt", ".c", ".cpp", ".h", ".hpp", ".m", ".mm",
+            ".rb", ".php", ".sh", ".bash", ".zsh", ".fish",
+            ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".xml",
+            ".html", ".htm", ".css", ".scss", ".less", ".sql", ".log",
+            ".csv", ".tsv", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+            ".svg", ".pdf", ".zip", ".tar", ".gz", ".dmg", ".app",
+            ".plist", ".entitlements", ".xcodeproj", ".xcworkspace",
+            ".storyboard", ".xib",
+        )))
+    ):
+        return False
+
     if length < 12 or length > 128:
         return False
     if any(c.isspace() for c in text):
         return False
 
-    lower = text.lower()
     if lower in {"password", "secret", "token", "apikey", "api_key"}:
         return False
 
@@ -294,6 +315,83 @@ def url_host(text: str) -> str:
         return p.netloc or p.path or text
     except Exception:
         return text
+
+
+# File-path preview support: when clipboard text is a local file path,
+# Quick Look can show content or a thumbnail for these extensions.
+TEXT_PREVIEW_EXTS = frozenset({
+    ".txt", ".md", ".markdown", ".py", ".js", ".ts", ".css",
+    ".html", ".htm", ".xml", ".yaml", ".yml", ".csv", ".log",
+    ".json", ".swift", ".rs", ".go", ".sh", ".rb", ".php",
+    ".c", ".cpp", ".h", ".hpp", ".java", ".kt", ".sql",
+})
+IMAGE_PREVIEW_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".tif", ".tiff", ".heic", ".heif", ".svg",
+})
+# Exactly 10 primary extensions highlighted for rich content preview
+# (subset of TEXT + IMAGE that get special handling beyond plain text).
+PRIMARY_FILE_PREVIEW_EXTS = (
+    ".md", ".py", ".js", ".ts", ".css",
+    ".html", ".xml", ".yaml", ".csv", ".log",
+)
+
+
+def try_local_file_path(text: str) -> Path | None:
+    """Return a Path if *text* looks like an existing local file path."""
+    if not text or len(text) > 1024 or "\n" in text or "\r" in text:
+        return None
+    raw = text.strip()
+    # file:// URL
+    if raw.lower().startswith("file://"):
+        try:
+            from urllib.parse import unquote
+            parsed = urlparse(raw)
+            if parsed.scheme.lower() != "file":
+                return None
+            path_str = unquote(parsed.path)
+            # On macOS, path is usually absolute
+            p = Path(path_str)
+        except Exception:
+            return None
+    else:
+        # Expand ~ and resolve relative-looking paths carefully
+        if raw.startswith("~"):
+            p = Path(raw).expanduser()
+        elif raw.startswith("/"):
+            p = Path(raw)
+        else:
+            # Avoid treating ordinary short text as relative paths
+            return None
+    try:
+        if p.is_file() and p.stat().st_size >= 0:
+            return p.resolve()
+    except (OSError, RuntimeError):
+        return None
+    return None
+
+
+def read_text_preview(path: Path, max_bytes: int = 48_000) -> str | None:
+    """Read a text file for Quick Look, with size and encoding safety."""
+    try:
+        size = path.stat().st_size
+        if size == 0:
+            return "(empty file)"
+        if size > 2_000_000:  # hard cap
+            return f"(file too large to preview: {size:,} bytes)"
+        data = path.read_bytes()[:max_bytes]
+        # Detect encoding lightly
+        for enc in ("utf-8", "utf-8-sig", "utf-16", "latin-1"):
+            try:
+                text = data.decode(enc)
+                if len(data) == max_bytes and size > max_bytes:
+                    text += "\n\n… (truncated)"
+                return text
+            except UnicodeDecodeError:
+                continue
+        return "(binary or unknown encoding)"
+    except OSError:
+        return None
 
 
 def detect_language(text: str) -> str | None:
@@ -1155,20 +1253,79 @@ class QuickLookPreviewPanel(NSPanel):
             height = swatch_size + 28 + 2 * QL_PADDING
 
         else:
-            # readable expanded popup
-            display = text
-            if not display and kind != "image":
-                display = "(empty)"
-            # pretty-print json whenever possible
-            stripped = display.strip()
-            if (stripped.startswith("{") and stripped.endswith("}")) or (
-                stripped.startswith("[") and stripped.endswith("]")
-            ):
-                try:
-                    display = json.dumps(json.loads(stripped), indent=2, ensure_ascii=False)
-                except Exception:
-                    pass
-            width, height = self._add_text_preview(content, display)
+            # File-path preview: if clipboard text points to an existing local file,
+            # show image thumbnail or text content for supported extensions.
+            file_path = try_local_file_path(text)
+            if file_path is not None:
+                ext = file_path.suffix.lower()
+                if ext in IMAGE_PREVIEW_EXTS:
+                    try:
+                        img = NSImage.alloc().initWithContentsOfFile_(str(file_path))
+                        if img and img.size().width > 0:
+                            sz = img.size()
+                            iw, ih = float(sz.width), float(sz.height)
+                            scale = min(QL_IMAGE_MAX / max(iw, 1), QL_IMAGE_MAX / max(ih, 1), 1.0)
+                            disp_w = max(80, int(iw * scale))
+                            disp_h = max(80, int(ih * scale))
+                            # header with filename
+                            name_label = NSTextField.alloc().initWithFrame_(
+                                NSMakeRect(QL_PADDING, QL_PADDING + disp_h + 6, max(disp_w, 180), 18)
+                            )
+                            name_label.setStringValue_(file_path.name)
+                            name_label.setBezeled_(False)
+                            name_label.setDrawsBackground_(False)
+                            name_label.setEditable_(False)
+                            name_label.setSelectable_(False)
+                            name_label.setFont_(NSFont.systemFontOfSize_weight_(11, 0.4))
+                            name_label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.75, 1.0))
+                            content.addSubview_(name_label)
+                            iv = NSImageView.alloc().initWithFrame_(
+                                NSMakeRect(QL_PADDING, QL_PADDING, disp_w, disp_h)
+                            )
+                            iv.setImage_(img)
+                            iv.setImageScaling_(3)
+                            iv.setWantsLayer_(True)
+                            iv.layer().setCornerRadius_(6.0)
+                            iv.layer().setMasksToBounds_(True)
+                            content.addSubview_(iv)
+                            width = max(disp_w, 180) + 2 * QL_PADDING
+                            height = disp_h + 28 + 2 * QL_PADDING
+                        else:
+                            width, height = self._add_file_info_preview(content, file_path)
+                    except Exception:
+                        width, height = self._add_file_info_preview(content, file_path)
+                elif ext in TEXT_PREVIEW_EXTS:
+                    body = read_text_preview(file_path)
+                    if body is None:
+                        width, height = self._add_file_info_preview(content, file_path)
+                    else:
+                        # pretty-print JSON files
+                        if ext == ".json":
+                            try:
+                                body = json.dumps(json.loads(body), indent=2, ensure_ascii=False)
+                            except Exception:
+                                pass
+                        header = f"📄 {file_path.name}"
+                        display = f"{header}\n{'─' * min(40, len(header) + 4)}\n{body}"
+                        width, height = self._add_text_preview(content, display)
+                else:
+                    # unsupported extension – show icon + metadata
+                    width, height = self._add_file_info_preview(content, file_path)
+            else:
+                # readable expanded popup (plain text / JSON)
+                display = text
+                if not display and kind != "image":
+                    display = "(empty)"
+                # pretty-print json whenever possible
+                stripped = display.strip()
+                if (stripped.startswith("{") and stripped.endswith("}")) or (
+                    stripped.startswith("[") and stripped.endswith("]")
+                ):
+                    try:
+                        display = json.dumps(json.loads(stripped), indent=2, ensure_ascii=False)
+                    except Exception:
+                        pass
+                width, height = self._add_text_preview(content, display)
 
         content.setFrame_(NSMakeRect(0, 0, width, height))
         self.setContentView_(content)
@@ -1327,6 +1484,76 @@ class QuickLookPreviewPanel(NSPanel):
         else:
             label.setStringValue_("…")
             label.setToolTip_("Detecting language…")
+
+    def _add_file_info_preview(self, content, path: Path):
+        """Show file icon + name + size + path for unsupported or non-text files."""
+        icon_size = 64
+        try:
+            icon = NSWorkspace.sharedWorkspace().iconForFile_(str(path))
+            if icon:
+                icon.setSize_((icon_size, icon_size))
+        except Exception:
+            icon = None
+
+        y = QL_PADDING
+        if icon:
+            iv = NSImageView.alloc().initWithFrame_(
+                NSMakeRect(QL_PADDING, y + 40, icon_size, icon_size)
+            )
+            iv.setImage_(icon)
+            iv.setImageScaling_(3)
+            content.addSubview_(iv)
+
+        name_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(QL_PADDING + icon_size + 10, y + 70, 220, 22)
+        )
+        name_label.setStringValue_(path.name)
+        name_label.setBezeled_(False)
+        name_label.setDrawsBackground_(False)
+        name_label.setEditable_(False)
+        name_label.setSelectable_(True)
+        name_label.setFont_(NSFont.systemFontOfSize_weight_(13, 0.5))
+        name_label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.95, 1.0))
+        content.addSubview_(name_label)
+
+        try:
+            size = path.stat().st_size
+            if size < 1024:
+                size_str = f"{size} B"
+            elif size < 1024 * 1024:
+                size_str = f"{size / 1024:.1f} KB"
+            else:
+                size_str = f"{size / (1024 * 1024):.1f} MB"
+        except OSError:
+            size_str = "?"
+
+        meta = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(QL_PADDING + icon_size + 10, y + 48, 220, 18)
+        )
+        meta.setStringValue_(f"{size_str}  ·  {path.suffix.lower() or 'no ext'}")
+        meta.setBezeled_(False)
+        meta.setDrawsBackground_(False)
+        meta.setEditable_(False)
+        meta.setSelectable_(False)
+        meta.setFont_(NSFont.systemFontOfSize_(11))
+        meta.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.65, 1.0))
+        content.addSubview_(meta)
+
+        path_label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(QL_PADDING, y, 300, 36)
+        )
+        path_label.setStringValue_(str(path))
+        path_label.setBezeled_(False)
+        path_label.setDrawsBackground_(False)
+        path_label.setEditable_(False)
+        path_label.setSelectable_(True)
+        path_label.setFont_(NSFont.monospacedSystemFontOfSize_weight_(10, 0.3))
+        path_label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.55, 1.0))
+        content.addSubview_(path_label)
+
+        width = max(320, icon_size + 240 + 2 * QL_PADDING)
+        height = icon_size + 50 + 2 * QL_PADDING
+        return width, height
 
     def _add_text_preview(self, content, text: str):
         """Add a scrollable text view + liquid-glass controls; return (width, height)."""
@@ -1925,6 +2152,35 @@ class SlotRowView(NSView):
             icon.setFont_(NSFont.systemFontOfSize_(11))
             self.addSubview_(icon)
             left_x += 18
+        elif try_local_file_path(self.full_text) is not None:
+            # Show Finder-style file icon for local paths
+            fp = try_local_file_path(self.full_text)
+            try:
+                ficon = NSWorkspace.sharedWorkspace().iconForFile_(str(fp))
+                if ficon:
+                    ficon.setSize_((preview_size, preview_size))
+                    iv = NSImageView.alloc().initWithFrame_(
+                        NSMakeRect(left_x, 7, preview_size, preview_size)
+                    )
+                    iv.setImage_(ficon)
+                    iv.setImageScaling_(3)
+                    iv.setWantsLayer_(True)
+                    iv.layer().setCornerRadius_(4.0)
+                    iv.layer().setMasksToBounds_(True)
+                    self.addSubview_(iv)
+                    left_x += preview_size + 6
+                else:
+                    raise RuntimeError("no icon")
+            except Exception:
+                icon = NSTextField.alloc().initWithFrame_(NSMakeRect(left_x, 7, 16, 20))
+                icon.setStringValue_("📄")
+                icon.setBezeled_(False)
+                icon.setDrawsBackground_(False)
+                icon.setEditable_(False)
+                icon.setSelectable_(False)
+                icon.setFont_(NSFont.systemFontOfSize_(11))
+                self.addSubview_(icon)
+                left_x += 18
         elif self.has_style:
             style_icon = NSTextField.alloc().initWithFrame_(NSMakeRect(left_x, 7, 16, 20))
             style_icon.setStringValue_("𝗔")
@@ -1992,6 +2248,14 @@ class SlotRowView(NSView):
             title = slot_data.get("url_title")
             host = url_host(self.full_text)
             return f"{title}  ·  {host}" if title else host
+        fp = try_local_file_path(self.full_text)
+        if fp is not None:
+            ext = fp.suffix.lower()
+            if ext in IMAGE_PREVIEW_EXTS:
+                return f"🖼 {fp.name}"
+            if ext in TEXT_PREVIEW_EXTS:
+                return f"📄 {fp.name}"
+            return f"📁 {fp.name}"
         if not self.full_text:
             return "(empty)"
         prefix = "🎨 " if self.has_style else ""
