@@ -58,12 +58,16 @@ echo "⬆️  Upgrading pip / setuptools / wheel to latest..."
 echo ""
 
 # Packages required by PasteDeck (order matters: pyobjc-core first)
+# - pyobjc-framework-NaturalLanguage → language detection in Quick Look
+# - certifi → SSL certs for Translate (Google / MyMemory)
 PACKAGES=(
     "pyobjc-core"
     "pyobjc-framework-Cocoa"
     "pyobjc-framework-Quartz"
+    "pyobjc-framework-NaturalLanguage"
     "rumps"
     "quickmachotkey"
+    "certifi"
 )
 
 # Install one package at a time with retries for reliability
@@ -119,9 +123,12 @@ check_import() {
 
 check_import "objc (pyobjc-core)"           "import objc"
 check_import "AppKit (Cocoa)"               "from AppKit import NSPasteboard"
+check_import "Foundation"                   "from Foundation import NSObject"
 check_import "Quartz"                       "import Quartz"
+check_import "NaturalLanguage"              "from NaturalLanguage import NLLanguageRecognizer"
 check_import "rumps"                        "import rumps"
 check_import "quickmachotkey"               "from quickmachotkey import quickHotKey"
+check_import "certifi"                      "import certifi"
 
 echo ""
 
@@ -135,10 +142,13 @@ else
     echo ""
     echo "   Manual fix (run in Terminal):"
     echo "   $PYTHON_BIN -m pip install --user --upgrade --force-reinstall --no-cache-dir \\"
-    echo "       pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz rumps quickmachotkey"
+    echo "       pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz \\"
+    echo "       pyobjc-framework-NaturalLanguage rumps quickmachotkey certifi"
     echo ""
     echo "   If you still see import errors, try a fresh user site:"
-    echo "   $PYTHON_BIN -m pip uninstall -y pyobjc-core pyobjc-framework-Cocoa pyobjc-framework-Quartz rumps quickmachotkey"
+    echo "   $PYTHON_BIN -m pip uninstall -y pyobjc-core pyobjc-framework-Cocoa \\"
+    echo "       pyobjc-framework-Quartz pyobjc-framework-NaturalLanguage \\"
+    echo "       rumps quickmachotkey certifi"
     echo "   then re-run this script."
 fi
 
