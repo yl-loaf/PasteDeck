@@ -340,6 +340,27 @@ def preferred_target_language() -> str:
     return "en"
 
 
+def lang_display_name(code: str | None) -> str:
+    """Human-readable name for a BCP-47 / ISO language code."""
+    if not code or code.lower() in ("auto", "und", "unknown"):
+        return "—"
+    base = code.lower().split("-")[0].split("_")[0]
+    for c, name in TRANSLATE_LANGS:
+        if c == base:
+            return name
+    # Common extras from NLLanguageRecognizer
+    extras = {
+        "zh": "Chinese", "yue": "Cantonese", "wuu": "Wu Chinese",
+        "nb": "Norwegian", "nn": "Norwegian", "no": "Norwegian",
+        "he": "Hebrew", "iw": "Hebrew", "el": "Greek", "cs": "Czech",
+        "da": "Danish", "fi": "Finnish", "hu": "Hungarian", "ro": "Romanian",
+        "bg": "Bulgarian", "hr": "Croatian", "sk": "Slovak", "sl": "Slovenian",
+        "ms": "Malay", "fa": "Persian", "ur": "Urdu", "bn": "Bengali",
+        "ta": "Tamil", "te": "Telugu", "mr": "Marathi", "gu": "Gujarati",
+    }
+    return extras.get(base, base.upper())
+
+
 def _ssl_context():
     """SSL context that works even when macOS Python certificates are broken."""
     import ssl
@@ -993,6 +1014,8 @@ class QuickLookPreviewPanel(NSPanel):
         self._translate_btn = None
         self._replace_btn = None
         self._lang_popup = None
+        self._detected_label = None
+        self._detected_lang = None
         self._target_lang = "en"
         self._translating = False
         return self
@@ -1011,6 +1034,8 @@ class QuickLookPreviewPanel(NSPanel):
         self._translate_btn = None
         self._replace_btn = None
         self._lang_popup = None
+        self._detected_label = None
+        self._detected_lang = None
         self._target_lang = "en"
         self._translating = False
         kind = slot_data.get("kind", "text")
@@ -1051,8 +1076,10 @@ class QuickLookPreviewPanel(NSPanel):
         if layer is not None:
             layer.setCornerRadius_(radius)
             layer.setMasksToBounds_(True)
-            layer.setBorderWidth_(0.0)
-            layer.setBorderColor_(NSColor.clearColor().CGColor())
+            layer.setBorderWidth_(0.6)
+            layer.setBorderColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.18).CGColor()
+            )
 
         width = QL_MIN_WIDTH
         height = 80
@@ -1193,17 +1220,124 @@ class QuickLookPreviewPanel(NSPanel):
     def is_mouse_over(self) -> bool:
         return bool(self._over_preview)
 
+    def _style_glass_button(self, btn, primary: bool = False, font_size: float = 9.0):
+        """Apply liquid-glass look: frosted translucent fill, soft border, pill shape."""
+        btn.setBordered_(False)
+        btn.setBezelStyle_(0)  # NSBezelStyleNone – full control via layer
+        try:
+            btn.setControlSize_(1)
+        except Exception:
+            pass
+        enabled = bool(btn.isEnabled())
+        weight = 0.45 if primary else 0.3
+        btn.setFont_(NSFont.systemFontOfSize_weight_(font_size, weight))
+        btn.setWantsLayer_(True)
+        layer = btn.layer()
+        if layer is None:
+            return
+        h = btn.frame().size.height
+        layer.setCornerRadius_(h / 2.0)
+        layer.setMasksToBounds_(True)
+        fill_a = (0.20 if primary else 0.09) if enabled else 0.05
+        border_a = (0.42 if primary else 0.24) if enabled else 0.12
+        text_a = (0.98 if primary else 0.88) if enabled else 0.40
+        layer.setBackgroundColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, fill_a).CGColor()
+        )
+        layer.setBorderWidth_(0.6 if primary else 0.5)
+        layer.setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, border_a).CGColor()
+        )
+        try:
+            btn.setContentTintColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(1.0, text_a)
+            )
+        except Exception:
+            pass
+        try:
+            layer.setShadowOpacity_(0.0)
+        except Exception:
+            pass
+
+    def _style_glass_popup(self, popup):
+        """Pill / liquid-glass styling for NSPopUpButton."""
+        try:
+            popup.setBordered_(False)
+        except Exception:
+            pass
+        try:
+            popup.setBezelStyle_(0)
+        except Exception:
+            pass
+        try:
+            popup.setControlSize_(1)
+        except Exception:
+            pass
+        popup.setFont_(NSFont.systemFontOfSize_weight_(10.0, 0.35))
+        popup.setWantsLayer_(True)
+        layer = popup.layer()
+        if layer is None:
+            return
+        h = popup.frame().size.height
+        layer.setCornerRadius_(h / 2.0)
+        layer.setMasksToBounds_(True)
+        layer.setBackgroundColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.10).CGColor()
+        )
+        layer.setBorderWidth_(0.5)
+        layer.setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.28).CGColor()
+        )
+        try:
+            popup.setContentTintColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.92)
+            )
+        except Exception:
+            pass
+
+    def _style_glass_chip(self, view_or_field):
+        """Small glass pill chip (e.g. detected-language label)."""
+        view_or_field.setWantsLayer_(True)
+        layer = view_or_field.layer()
+        if layer is None:
+            return
+        h = view_or_field.frame().size.height
+        layer.setCornerRadius_(h / 2.0)
+        layer.setMasksToBounds_(True)
+        layer.setBackgroundColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.08).CGColor()
+        )
+        layer.setBorderWidth_(0.5)
+        layer.setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.20).CGColor()
+        )
+
+    def _set_detected_label(self, code: str | None):
+        """Update the detected-language chip text (compact so it fits the pill)."""
+        self._detected_lang = code
+        label = getattr(self, "_detected_label", None)
+        if label is None:
+            return
+        name = lang_display_name(code)
+        if code and code.lower() not in ("auto", "und", "unknown", ""):
+            # Short names stay readable in the fixed-width chip
+            short = name if len(name) <= 12 else (name[:11] + "…")
+            label.setStringValue_(short)
+            label.setToolTip_(f"Detected: {name} ({code})")
+        else:
+            label.setStringValue_("…")
+            label.setToolTip_("Detecting language…")
+
     def _add_text_preview(self, content, text: str):
-        """Add a scrollable text view + language dropdown + Translate button; return (width, height)."""
-        # Cap display length for sanity
+        """Add a scrollable text view + liquid-glass controls; return (width, height)."""
         max_chars = 12000
         if len(text) > max_chars:
             text = text[:max_chars] + "\n… (truncated)"
 
         self._original_text = text
         self._target_lang = "en"
+        self._detected_lang = None
 
-        # estimate size (leave room at bottom for controls)
         lines = text.count("\n") + 1
         longest = max((len(ln) for ln in text.splitlines()), default=20)
         est_w = min(QL_MAX_WIDTH, max(QL_MIN_WIDTH, min(longest * 7 + 2 * QL_PADDING, QL_MAX_WIDTH)))
@@ -1216,11 +1350,10 @@ class QuickLookPreviewPanel(NSPanel):
         )
         scroll.setHasVerticalScroller_(True)
         scroll.setHasHorizontalScroller_(False)
-        scroll.setAutohidesScrollers_(False)  # always show so translation isn't missed
+        scroll.setAutohidesScrollers_(False)
         scroll.setBorderType_(0)
         scroll.setDrawsBackground_(False)
         try:
-            # Prefer overlay-style scroller when available (cleaner look)
             scroll.setScrollerStyle_(1)  # NSScrollerStyleOverlay
         except Exception:
             pass
@@ -1244,68 +1377,125 @@ class QuickLookPreviewPanel(NSPanel):
         self._text_view = tv
         self._scroll_view = scroll
 
-        # Language dropdown + Translate + Replace (Replace enabled after success)
-        popup_w = 100
-        btn_w = 78
-        gap = 6
-        total_ctrl = popup_w + gap + btn_w + gap + btn_w
-        start_x = max(QL_PADDING, est_w - QL_PADDING - total_ctrl)
+        # Bottom control bar: [detected chip] …… [lang pill] [Translate] [Replace]
+        # Compact controls, shared baseline so nothing sits higher than its neighbors.
+        det_w = 78
+        popup_w = 90
+        btn_w = 85          # compact Translate / Replace
+        gap = 5
+        mid_gap = 8
+        btn_h = 22          # shared control height
+        y = QL_PADDING + 3  # optically center in the control strip
+        total_right = popup_w + gap + btn_w + gap + btn_w
+        min_for_controls = QL_PADDING + det_w + mid_gap + total_right + QL_PADDING
+        if est_w < min_for_controls:
+            est_w = min_for_controls
+            scroll.setFrame_(
+                NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + 6, est_w - 2 * QL_PADDING, text_h)
+            )
+            tv.setMaxSize_(NSMakeSize(est_w - 2 * QL_PADDING, 1e7))
+        start_x = est_w - QL_PADDING - total_right
 
-        # NSPopUpButton for target language
-        popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
-            NSMakeRect(start_x, QL_PADDING, popup_w, ctrl_h - 2), False
+        # Detected-language glass chip — outer glass view + vertically centered label
+        det_wrap = NSView.alloc().initWithFrame_(
+            NSMakeRect(QL_PADDING, y, det_w, btn_h)
         )
-        popup.setFont_(NSFont.systemFontOfSize_(11))
+        self._style_glass_chip(det_wrap)
+        det = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(0, 0, det_w, btn_h)
+        )
+        det.setStringValue_("…")
+        det.setBezeled_(False)
+        det.setDrawsBackground_(False)
+        det.setEditable_(False)
+        det.setSelectable_(False)
+        det.setFont_(NSFont.systemFontOfSize_weight_(9.0, 0.35))
+        det.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.88, 1.0))
+        det.setAlignment_(1)  # center
         try:
-            popup.setControlSize_(1)
+            cell = det.cell()
+            if cell is not None:
+                cell.setAlignment_(1)
+                try:
+                    cell.setUsesSingleLineMode_(True)
+                except Exception:
+                    pass
         except Exception:
             pass
+        # Vertically center label inside the pill (NSTextField draws high by default)
+        label_h = 14
+        label_y = int((btn_h - label_h) / 2) - 1
+        det.setFrame_(NSMakeRect(2, label_y, det_w - 4, label_h))
+        det.setToolTip_("Detected language")
+        det_wrap.addSubview_(det)
+        content.addSubview_(det_wrap)
+        self._detected_label = det
+
+        # Language dropdown – glass pill (right group)
+        popup = NSPopUpButton.alloc().initWithFrame_pullsDown_(
+            NSMakeRect(start_x, y, popup_w, btn_h), False
+        )
         popup.removeAllItems()
         for code, name in TRANSLATE_LANGS:
-            popup.addItemWithTitle_(f"{name} ({code})")
+            popup.addItemWithTitle_(f"{name}")
         popup.selectItemAtIndex_(0)
         popup.setTarget_(self)
         popup.setAction_("targetLangChanged:")
         popup.setToolTip_("Target language")
+        self._style_glass_popup(popup)
         content.addSubview_(popup)
         self._lang_popup = popup
 
-        # Translate button
+        # Translate – compact primary glass (icon + short label)
         btn = NSButton.alloc().initWithFrame_(
-            NSMakeRect(start_x + popup_w + gap, QL_PADDING, btn_w, ctrl_h - 2)
+            NSMakeRect(start_x + popup_w + gap, y, btn_w, btn_h)
         )
         btn.setTitle_("Translate")
-        btn.setBezelStyle_(1)
-        btn.setFont_(NSFont.systemFontOfSize_(11))
-        btn.setBordered_(True)
-        try:
-            btn.setControlSize_(1)
-        except Exception:
-            pass
         btn.setTarget_(self)
         btn.setAction_("translateClicked:")
         btn.setToolTip_("Translate this text")
+        btn.setImage_(None)
+        btn.setImagePosition_(0)  # NSNoImage – title only
+        try:
+            btn.setAlignment_(1)  # NSTextAlignmentCenter
+        except Exception:
+            pass
+        self._style_glass_button(btn, primary=True, font_size=9.0)
         content.addSubview_(btn)
         self._translate_btn = btn
 
-        # Replace button (disabled until a translation exists)
+        # Replace – matching compact secondary glass
         rep = NSButton.alloc().initWithFrame_(
-            NSMakeRect(start_x + popup_w + gap + btn_w + gap, QL_PADDING, btn_w, ctrl_h - 2)
+            NSMakeRect(start_x + popup_w + gap + btn_w + gap, y, btn_w, btn_h)
         )
         rep.setTitle_("Replace")
-        rep.setBezelStyle_(1)
-        rep.setFont_(NSFont.systemFontOfSize_(11))
-        rep.setBordered_(True)
-        try:
-            rep.setControlSize_(1)
-        except Exception:
-            pass
         rep.setEnabled_(False)
         rep.setTarget_(self)
         rep.setAction_("replaceClicked:")
         rep.setToolTip_("Replace slot contents with the translation")
+        rep.setImage_(None)
+        rep.setImagePosition_(0)
+        try:
+            rep.setAlignment_(1)  # NSTextAlignmentCenter
+        except Exception:
+            pass
+        self._style_glass_button(rep, primary=False, font_size=9.0)
         content.addSubview_(rep)
         self._replace_btn = rep
+
+        # Async language detection so the chip fills in quickly
+        original = text
+        def detect_worker():
+            src = detect_language(original)
+            def apply():
+                if self._original_text is original and getattr(self, "_detected_label", None):
+                    self._set_detected_label(src)
+            try:
+                from Foundation import NSOperationQueue
+                NSOperationQueue.mainQueue().addOperationWithBlock_(apply)
+            except Exception:
+                apply()
+        threading.Thread(target=detect_worker, daemon=True).start()
 
         return est_w, est_h
 
@@ -1326,11 +1516,14 @@ class QuickLookPreviewPanel(NSPanel):
         if self._translate_btn:
             self._translate_btn.setEnabled_(False)
             self._translate_btn.setTitle_("…")
+            self._translate_btn.setImage_(None)
+            self._style_glass_button(self._translate_btn, primary=True, font_size=9.0)
         if getattr(self, "_lang_popup", None):
             self._lang_popup.setEnabled_(False)
         if getattr(self, "_replace_btn", None):
             self._replace_btn.setEnabled_(False)
             self._replace_btn.setTitle_("Replace")
+            self._style_glass_button(self._replace_btn, primary=False, font_size=9.0)
 
         original = self._original_text
         tv = self._text_view
@@ -1339,7 +1532,7 @@ class QuickLookPreviewPanel(NSPanel):
         def worker():
             src = detect_language(original) or "auto"
             translated_result = None
-            if src != "auto" and src.lower() == target.lower():
+            if src != "auto" and src.lower().split("-")[0] == target.lower():
                 result_text = original
                 status = f"Already {src}"
                 scroll_to_translation = False
@@ -1360,6 +1553,7 @@ class QuickLookPreviewPanel(NSPanel):
             def update():
                 try:
                     if self._text_view is tv and self._original_text is original:
+                        self._set_detected_label(src if src != "auto" else None)
                         tv.setString_(result_text)
                         if scroll_to_translation:
                             try:
@@ -1374,15 +1568,18 @@ class QuickLookPreviewPanel(NSPanel):
                                 pass
                         if self._translate_btn:
                             self._translate_btn.setTitle_("✓" if status == "Done" else "Retry")
+                            self._translate_btn.setImage_(None)
                             self._translate_btn.setEnabled_(True)
+                            self._style_glass_button(self._translate_btn, primary=True, font_size=9.0)
                         if getattr(self, "_lang_popup", None):
                             self._lang_popup.setEnabled_(True)
-                        # Enable Replace only on successful translation
+                            self._style_glass_popup(self._lang_popup)
                         self._translated_text = translated_result
                         if getattr(self, "_replace_btn", None):
                             self._replace_btn.setEnabled_(bool(translated_result))
                             if translated_result:
                                 self._replace_btn.setTitle_("Replace")
+                            self._style_glass_button(self._replace_btn, primary=False, font_size=9.0)
                 finally:
                     self._translating = False
 
@@ -1417,6 +1614,7 @@ class QuickLookPreviewPanel(NSPanel):
             if self._replace_btn:
                 self._replace_btn.setTitle_("✓")
                 self._replace_btn.setEnabled_(False)
+                self._style_glass_button(self._replace_btn, primary=False, font_size=9.0)
             if self._text_view is not None:
                 self._text_view.setString_(translated)
             self._original_text = translated
@@ -1442,6 +1640,8 @@ class QuickLookPreviewPanel(NSPanel):
         self._translate_btn = None
         self._replace_btn = None
         self._lang_popup = None
+        self._detected_label = None
+        self._detected_lang = None
         self._target_lang = "en"
         self._translating = False
 
@@ -1520,6 +1720,17 @@ class CloseButtonView(NSView):
             return None
         self.on_close = on_close
         self.setToolTip_("Close (Esc)")
+        self.setWantsLayer_(True)
+        layer = self.layer()
+        layer.setCornerRadius_(frame.size.height / 2.0)
+        layer.setMasksToBounds_(True)
+        layer.setBackgroundColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.08).CGColor()
+        )
+        layer.setBorderWidth_(0.5)
+        layer.setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.22).CGColor()
+        )
         label = NSTextField.alloc().initWithFrame_(
             NSMakeRect(0, 0, frame.size.width, frame.size.height)
         )
@@ -1528,20 +1739,33 @@ class CloseButtonView(NSView):
         label.setDrawsBackground_(False)
         label.setEditable_(False)
         label.setSelectable_(False)
-        label.setFont_(NSFont.systemFontOfSize_(14))
-        label.setAlignment_(2)
-        label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.7, 1.0))
+        label.setFont_(NSFont.systemFontOfSize_weight_(11, 0.4))
+        label.setAlignment_(1)  # center
+        label.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.75, 1.0))
         self.addSubview_(label)
+        self._label = label
         return self
 
     def mouseEntered_(self, event):
-        if self.subviews():
-            self.subviews()[0].setTextColor_(NSColor.whiteColor())
+        self.layer().setBackgroundColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.18).CGColor()
+        )
+        self.layer().setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.38).CGColor()
+        )
+        if getattr(self, "_label", None):
+            self._label.setTextColor_(NSColor.whiteColor())
 
     def mouseExited_(self, event):
-        if self.subviews():
-            self.subviews()[0].setTextColor_(
-                NSColor.colorWithCalibratedWhite_alpha_(0.7, 1.0)
+        self.layer().setBackgroundColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.08).CGColor()
+        )
+        self.layer().setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.22).CGColor()
+        )
+        if getattr(self, "_label", None):
+            self._label.setTextColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(0.75, 1.0)
             )
 
     def mouseDown_(self, event):
@@ -1576,19 +1800,35 @@ class SlotRowView(NSView):
 
         if self.sensitive:
             self._normal_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.35, 0.12, 0.12, 1.0
+                0.55, 0.18, 0.18, 0.32
             )
             self._hover_color = NSColor.colorWithCalibratedRed_green_blue_alpha_(
-                0.45, 0.16, 0.16, 1.0
+                0.65, 0.22, 0.22, 0.45
+            )
+            self._border_normal = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1.0, 0.45, 0.45, 0.28
+            )
+            self._border_hover = NSColor.colorWithCalibratedRed_green_blue_alpha_(
+                1.0, 0.55, 0.55, 0.40
             )
         else:
-            base = 0.20 if self.pinned else (0.18 if self.slot == 1 else 0.14)
-            self._normal_color = NSColor.colorWithCalibratedWhite_alpha_(base, 1.0)
-            self._hover_color = NSColor.colorWithCalibratedWhite_alpha_(base + 0.10, 1.0)
+            # Liquid-glass slot: translucent white fill that sits on HUD vibrancy
+            base = 0.14 if self.pinned else (0.12 if self.slot == 1 else 0.08)
+            hover = base + 0.10
+            self._normal_color = NSColor.colorWithCalibratedWhite_alpha_(1.0, base)
+            self._hover_color = NSColor.colorWithCalibratedWhite_alpha_(1.0, hover)
+            self._border_normal = NSColor.colorWithCalibratedWhite_alpha_(
+                1.0, 0.22 if self.pinned else 0.14
+            )
+            self._border_hover = NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.32)
 
         self.setWantsLayer_(True)
-        self.layer().setBackgroundColor_(self._normal_color.CGColor())
-        self.layer().setCornerRadius_(8.0)
+        layer = self.layer()
+        layer.setBackgroundColor_(self._normal_color.CGColor())
+        layer.setCornerRadius_(10.0)
+        layer.setMasksToBounds_(True)
+        layer.setBorderWidth_(0.5)
+        layer.setBorderColor_(self._border_normal.CGColor())
 
         tip_parts = []
         if self.sensitive:
@@ -1758,12 +1998,18 @@ class SlotRowView(NSView):
         return prefix + truncate(self.full_text)
 
     def mouseEntered_(self, event):
-        self.layer().setBackgroundColor_(self._hover_color.CGColor())
+        layer = self.layer()
+        layer.setBackgroundColor_(self._hover_color.CGColor())
+        if getattr(self, "_border_hover", None) is not None:
+            layer.setBorderColor_(self._border_hover.CGColor())
         if self.on_hover:
             self.on_hover(self.slot, self.slot_data, True)
 
     def mouseExited_(self, event):
-        self.layer().setBackgroundColor_(self._normal_color.CGColor())
+        layer = self.layer()
+        layer.setBackgroundColor_(self._normal_color.CGColor())
+        if getattr(self, "_border_normal", None) is not None:
+            layer.setBorderColor_(self._border_normal.CGColor())
         if self.on_hover:
             self.on_hover(self.slot, self.slot_data, False)
 
@@ -1996,8 +2242,11 @@ class ClipboardPickerPanel(NSPanel):
         if layer is not None:
             layer.setCornerRadius_(radius)
             layer.setMasksToBounds_(True)
-            layer.setBorderWidth_(0.0)
-            layer.setBorderColor_(NSColor.clearColor().CGColor())
+            # Soft liquid-glass rim
+            layer.setBorderWidth_(0.6)
+            layer.setBorderColor_(
+                NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.18).CGColor()
+            )
 
         title_y = PANEL_HEIGHT - TITLE_TOP_INSET - 22
         title = NSTextField.alloc().initWithFrame_(
