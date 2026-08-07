@@ -2,63 +2,123 @@
 
 > A lightweight, privacy-focused multi-clipboard manager for macOS.
 
-**PasteDeck** expands your macOS clipboard into a 9-slot power tool that runs directly from your menu bar. Built with Python and native AppKit APIs, it captures text, rich formatting, images, URLs, and hex colors—giving you instant hotkey access to past copies.
+**PasteDeck** expands your macOS clipboard into a 9-slot power tool that lives in the menu bar. Built with Python and native AppKit APIs, it captures text, rich formatting, images, URLs, and hex colors—with instant hotkey access, hover Quick Look, and in-panel translation.
 
 ---
 
 ## ✨ Key Features
 
-* **Global Hotkey Picker:** Press ⌥⇧⌘V anywhere on macOS to bring up a floating paste panel right at your cursor position.
-* **Rich Content Support:**
-  * **Images:** Preview captured screenshots and image clips directly in the picker.
-  * **Hex Colors:** Automatic color swatch previews for hex values (e.g., `#676767`, `#FF007F`).
-  * **URLs:** Automatically fetches and displays web page titles.
-  * **Rich Text:** Retains formatting (RTF/HTML) across applications.
-* **Smart Privacy & Auto-Delete:**
-  * Automatically detects copies coming from password managers (1Password, Bitwarden, LastPass, Keychain, etc.) and high-entropy secret patterns.
-  * Sensitive items are encrypted in memory, **never written to disk**, and automatically deleted after 45 seconds.
-* **Slot Pinning:** Lock your frequently used snippets or boilerplate text to fixed slots so they never roll off your history stack.
-* **⌨️ Fast Keyboard Control:**
-  * `1`–`9` to paste a slot.
-  * `⌥ + Slot` to toggle pin/unpin.
-  * `⌘ + Slot` to delete a specific slot.
-  * `0` to clear all unpinned items.
-  * `Esc` to close.
+### Core clipboard
+* **9 persistent slots** — history rolls forward; pinned items stay put.
+* **Global hotkey picker** — press **⌥⇧⌘V** anywhere to open a floating panel at the cursor.
+* **Rich content support**
+  * **Images** — screenshots and image clips with thumbnails in the picker.
+  * **Hex colors** — automatic color swatches (e.g. `#676767`, `#FF007F`).
+  * **URLs** — host extraction and optional page title.
+  * **Rich text** — RTF/HTML formatting retained across apps.
+* **Slot controls**
+  * `1`–`9` paste a slot
+  * `⌥ + slot` pin / unpin
+  * `⌘ + slot` delete a slot
+  * `0` clear all unpinned items
+  * `Esc` dismiss
+
+### Instant In-Line Quick Look
+* Hover any slot to peek without pressing Space.
+* Floating **QuickLookPreviewPanel** shows:
+  * Full image previews
+  * Expanded text / JSON
+  * Large color swatches
+* Preview is positioned beside the picker, aligned with the hovered slot.
+
+### Translate (inside Quick Look)
+* Language dropdown (common targets) + **Translate** + **Replace**.
+* **Detected-language chip** — Apple NaturalLanguage framework detects the source language asynchronously on open and refreshes after translate.
+* Engines: Google Translate (primary) and MyMemory (fallback), with SSL handling.
+* Result appears in-panel with auto-scroll.
+* **Replace** writes the translation back into the clipboard slot *and* the system pasteboard.
+
+### Privacy & sensitive data
+* Detects copies from password managers (1Password, Bitwarden, LastPass, Keychain, etc.) and high-entropy secret patterns.
+* Sensitive items are flagged 🔒, kept **only in RAM** (never written to disk), and auto-expire (default **45 seconds**, configurable).
+* Regular history stored locally at `~/.multi-clipboard.json`; settings at `~/.pastedeck-settings.json`.
+
+### Settings
+* Menu bar → **Settings…** opens a native window.
+* Configurable **sensitive auto-expire** interval.
+* Optional **notifications**.
+* Settings persisted across launches.
+
+### UI
+* **Liquid-glass** design throughout:
+  * Translucent glass slot rows with soft border and hover brighten
+  * Glass pills for Translate / Replace, language popup, close button, and detected-language chip
+  * Soft rim on picker and Quick Look panels
+* Menu bar dropdown with refined **PasteDeck** title header.
+* Picker panel titled **PasteDeck** with shortcut subtitle.
 
 ---
 
 ## Installation & Setup
 
 ### Prerequisites
-* **macOS:** 10.15 (Catalina) or newer.
-* **Python:** 3.10+
+* **macOS** 10.15 (Catalina) or newer
+* **Python** 3.10+
 
-### Dependencies
-Navigate into the path of the folder:
+### Install
 ```bash
 cd ~/path/to/PasteDeck
-```
-And run this ```.sh``` code:
-
-```bash
 chmod +x install_pastedeck.sh
 ./install_pastedeck.sh
 ```
-if that doesnt work, run this instead:
+
+If the script does not run, use:
 ```bash
-sh <path_to_file>
+sh /path/to/install_pastedeck.sh
 ```
-replace path to file by typing `sh `, with a space after sh and dragging and dropping the file into terminal.
-### 🛡️ Privacy & Security PasteDeck was built with privacy in mind:
+(type `sh `, then drag the file into Terminal.)
 
-**Local Storage:**
-All local clipboard history (except pinned/regular items) is kept strictly on your local machine under ~/.multi-clipboard.json.
+You can also install dependencies manually:
+```bash
+pip install -r requirements.txt
+```
 
-**Sensitive Data Handling:** 
-Sensitive items (passwords, tokens, credentials) are flagged with 🔒, kept only in **RAM**, and cleared automatically after 45 seconds.
+### Run
+```bash
+./run_pastedeck.command
+```
+or
+```bash
+python3 PasteDeck.py
+```
 
-**Zero Telemetry:** 
-No network connection or tracking telemetry is included.
+---
 
-**📄 License:**
-Distributed under the **MIT** License. See **LICENSE** for more information.
+## Privacy & Security
+
+* **Local-first** — clipboard history (except sensitive items) lives only on your machine under `~/.multi-clipboard.json`.
+* **Sensitive handling** — passwords/tokens stay in memory, auto-delete after the configured timeout, and are never persisted.
+* **Network** — used only when you explicitly press **Translate** (Google / MyMemory). No background telemetry or sync.
+* **License** — MIT. See [LICENSE](LICENSE).
+
+---
+
+## Keyboard reference
+
+| Key | Action |
+|-----|--------|
+| ⌥⇧⌘V | Open picker at cursor |
+| 1–9 | Paste slot |
+| ⌥ + 1–9 | Toggle pin |
+| ⌘ + 1–9 | Delete slot |
+| 0 | Clear unpinned |
+| Esc | Close picker |
+| Hover slot | Instant Quick Look |
+
+---
+
+## Notes
+
+* Network is required only for the optional Translate feature.
+* Sensitive auto-expire and notifications are controlled from **Settings…**.
+* Built with `rumps`, AppKit, and `quickmachotkey`.
