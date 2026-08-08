@@ -1652,6 +1652,7 @@ class QuickLookPreviewPanel(NSPanel):
         self._over_preview = False
         self._text_view = None
         self._scroll_view = None
+        self._text_wrap = None
         self._original_text = None
         self._translated_text = None
         self._translate_btn = None
@@ -1672,6 +1673,7 @@ class QuickLookPreviewPanel(NSPanel):
         self._over_preview = False
         self._text_view = None
         self._scroll_view = None
+        self._text_wrap = None
         self._original_text = None
         self._translated_text = None
         self._translate_btn = None
@@ -2128,8 +2130,19 @@ class QuickLookPreviewPanel(NSPanel):
         est_h = min(QL_MAX_HEIGHT, max(110, min(lines * 18 + 2 * QL_PADDING + ctrl_h + 8, QL_MAX_HEIGHT)))
 
         text_h = est_h - 2 * QL_PADDING - ctrl_h - 6
+        text_frame = NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + 6, est_w - 2 * QL_PADDING, text_h)
+
+        # Wrapper so we can reliably fade the whole text area (NSTextView
+        # often ignores alphaValue on itself / its scroll view).
+        wrap = NSView.alloc().initWithFrame_(text_frame)
+        try:
+            wrap.setWantsLayer_(True)
+            wrap.setAlphaValue_(1.0)
+        except Exception:
+            pass
+
         scroll = NSScrollView.alloc().initWithFrame_(
-            NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + 6, est_w - 2 * QL_PADDING, text_h)
+            NSMakeRect(0, 0, text_frame.size.width, text_frame.size.height)
         )
         scroll.setHasVerticalScroller_(True)
         scroll.setHasHorizontalScroller_(False)
@@ -2166,9 +2179,11 @@ class QuickLookPreviewPanel(NSPanel):
         tv.textContainer().setWidthTracksTextView_(True)
         tv.setMaxSize_(NSMakeSize(est_w - 2 * QL_PADDING, 1e7))
         scroll.setDocumentView_(tv)
-        content.addSubview_(scroll)
+        wrap.addSubview_(scroll)
+        content.addSubview_(wrap)
         self._text_view = tv
         self._scroll_view = scroll
+        self._text_wrap = wrap
 
         # Bottom control bar: [detected chip] …… [lang pill] [Translate] [Replace]
         # Compact controls, shared baseline so nothing sits higher than its neighbors.
@@ -2183,10 +2198,12 @@ class QuickLookPreviewPanel(NSPanel):
         min_for_controls = QL_PADDING + det_w + mid_gap + total_right + QL_PADDING
         if est_w < min_for_controls:
             est_w = min_for_controls
-            scroll.setFrame_(
-                NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + 6, est_w - 2 * QL_PADDING, text_h)
+            new_w = est_w - 2 * QL_PADDING
+            wrap.setFrame_(
+                NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + 6, new_w, text_h)
             )
-            tv.setMaxSize_(NSMakeSize(est_w - 2 * QL_PADDING, 1e7))
+            scroll.setFrame_(NSMakeRect(0, 0, new_w, text_h))
+            tv.setMaxSize_(NSMakeSize(new_w, 1e7))
         start_x = est_w - QL_PADDING - total_right
 
         # Detected-language glass chip — outer glass view + vertically centered label
@@ -2300,6 +2317,153 @@ class QuickLookPreviewPanel(NSPanel):
         else:
             self._target_lang = "en"
 
+    def _animate_text_transition(self, new_text: str, scroll_to_top: bool = True):
+        """Smooth cross-fade from current preview text to *new_text*.
+
+        Fades a plain wrapper view (not NSTextView — text views often ignore
+        alpha). Uses NSAnimationContext + a delayed selector so the swap always
+        lands even if the completion handler is dropped by PyObjC.
+        """
+        import sys
+        tv = getattr(self, "_text_view", None)
+        if tv is None:
+            print("[PasteDeck] animate: no text view", file=sys.stderr, flush=True)
+            return
+
+        # Prefer the dedicated wrap; fall back to scroll view / text view
+        target = (
+            getattr(self, "_text_wrap", None)
+            or getattr(self, "_scroll_view", None)
+            or tv
+        )
+        self._anim_generation = getattr(self, "_anim_generation", 0) + 1
+        gen = self._anim_generation
+        self._anim_pending_text = new_text
+        self._anim_scroll_to_top = bool(scroll_to_top)
+        self._anim_target = target
+        self._anim_tv = tv
+
+        print(
+            f"[PasteDeck] animate start gen={gen} target={type(target).__name__}",
+            file=sys.stderr,
+            flush=True,
+        )
+
+        def apply_text(text):
+            try:
+                tv.setString_(text)
+            except Exception as e:
+                print(f"[PasteDeck] setString failed: {e}", file=sys.stderr, flush=True)
+                return
+            if scroll_to_top:
+                try:
+                    tv.scrollRangeToVisible_((0, 0))
+                except Exception:
+                    pass
+                try:
+                    sv = getattr(self, "_scroll_view", None)
+                    if sv is not None:
+                        sv.flashScrollers()
+                except Exception:
+                    pass
+
+        def do_fade_in():
+            if getattr(self, "_anim_generation", None) != gen:
+                return
+            if getattr(self, "_text_view", None) is not tv:
+                return
+            text = getattr(self, "_anim_pending_text", None)
+            if text is None:
+                return
+            self._anim_pending_text = None
+            print("[PasteDeck] animate fade-in", file=sys.stderr, flush=True)
+            try:
+                apply_text(text)
+            except Exception:
+                pass
+            try:
+                target.setAlphaValue_(0.0)
+            except Exception:
+                pass
+            try:
+                from AppKit import NSAnimationContext
+                NSAnimationContext.beginGrouping()
+                ctx = NSAnimationContext.currentContext()
+                ctx.setDuration_(0.30)
+                try:
+                    ctx.setAllowsImplicitAnimation_(True)
+                except Exception:
+                    pass
+                target.animator().setAlphaValue_(1.0)
+                NSAnimationContext.endGrouping()
+            except Exception as e:
+                print(f"[PasteDeck] fade-in anim failed: {e}", file=sys.stderr, flush=True)
+                try:
+                    target.setAlphaValue_(1.0)
+                except Exception:
+                    pass
+
+        self._anim_fade_in = do_fade_in
+
+        try:
+            try:
+                target.setWantsLayer_(True)
+            except Exception:
+                pass
+            try:
+                target.setAlphaValue_(1.0)
+            except Exception:
+                pass
+
+            from AppKit import NSAnimationContext
+            NSAnimationContext.beginGrouping()
+            ctx = NSAnimationContext.currentContext()
+            ctx.setDuration_(0.20)
+            try:
+                ctx.setAllowsImplicitAnimation_(True)
+            except Exception:
+                pass
+            try:
+                ctx.setCompletionHandler_(do_fade_in)
+            except Exception:
+                pass
+            target.animator().setAlphaValue_(0.0)
+            NSAnimationContext.endGrouping()
+
+            # Safety net — always runs; do_fade_in is idempotent
+            try:
+                self.performSelector_withObject_afterDelay_(
+                    "translateAnimSafety:", None, 0.30
+                )
+            except Exception:
+                try:
+                    from Foundation import NSTimer
+                    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                        0.30, self, "translateAnimSafety:", None, False
+                    )
+                except Exception:
+                    do_fade_in()
+        except Exception as e:
+            print(f"[PasteDeck] animate exception: {e}", file=sys.stderr, flush=True)
+            do_fade_in()
+
+    def translateAnimSafety_(self, _obj=None):
+        """Safety completion for the translate cross-fade."""
+        import sys
+        print("[PasteDeck] animate safety", file=sys.stderr, flush=True)
+        cb = getattr(self, "_anim_fade_in", None)
+        if cb is not None:
+            try:
+                cb()
+            except Exception as e:
+                print(f"[PasteDeck] safety cb failed: {e}", file=sys.stderr, flush=True)
+                try:
+                    target = getattr(self, "_anim_target", None)
+                    if target is not None:
+                        target.setAlphaValue_(1.0)
+                except Exception:
+                    pass
+
     def translateClicked_(self, sender):
         """Action: run language detection + translation in background, update panel."""
         if self._translating or not self._original_text or not self._text_view:
@@ -2325,38 +2489,34 @@ class QuickLookPreviewPanel(NSPanel):
         def worker():
             src = detect_language(original) or "auto"
             translated_result = None
+            animate = False
             if src != "auto" and src.lower().split("-")[0] == target.lower():
                 result_text = original
                 status = f"Already {src}"
-                scroll_to_translation = False
             else:
                 translated, err = translate_text(original, source=src, target=target)
                 if translated:
-                    header = f"[{src or '?'} → {target}]"
-                    result_text = f"{original}\n\n{header}\n\n{translated}"
+                    # Clean swap to the translation (original stays in the slot until Replace)
+                    result_text = translated
                     status = "Done"
-                    scroll_to_translation = True
+                    animate = True
                     translated_result = translated
                 else:
                     short_err = (err or "Unknown error")[:60]
                     result_text = f"{original}\n\n⚠ {short_err}"
                     status = "Failed"
-                    scroll_to_translation = True
+                    animate = True
 
             def update():
                 try:
                     if self._text_view is tv and self._original_text is original:
                         self._set_detected_label(src if src != "auto" else None)
-                        tv.setString_(result_text)
-                        if scroll_to_translation:
+                        if animate:
+                            self._animate_text_transition(result_text, scroll_to_top=True)
+                        else:
+                            # Already same language — soft refresh, no heavy motion
                             try:
-                                tv.scrollRangeToVisible_((len(result_text), 0))
-                            except Exception:
-                                pass
-                            try:
-                                sv = getattr(self, "_scroll_view", None)
-                                if sv is not None:
-                                    sv.flashScrollers()
+                                tv.setString_(result_text)
                             except Exception:
                                 pass
                         if self._translate_btn:
@@ -2409,7 +2569,11 @@ class QuickLookPreviewPanel(NSPanel):
                 self._replace_btn.setEnabled_(False)
                 self._style_glass_button(self._replace_btn, primary=False, font_size=9.0)
             if self._text_view is not None:
-                self._text_view.setString_(translated)
+                # Already showing the translation after Translate — just ensure string matches
+                try:
+                    self._text_view.setString_(translated)
+                except Exception:
+                    pass
             self._original_text = translated
             self._translated_text = None
             # Refresh the main picker so the slot shows the new text
@@ -2424,10 +2588,17 @@ class QuickLookPreviewPanel(NSPanel):
     def hide_preview(self):
         self._over_preview = False
         self.orderOut_(None)
+        # Invalidate any in-flight translate cross-fade
+        self._anim_generation = getattr(self, "_anim_generation", 0) + 1
+        self._anim_pending_text = None
+        self._anim_fade_in = None
+        self._anim_target = None
+        self._anim_tv = None
         self._slot = None
         self._picker = None
         self._text_view = None
         self._scroll_view = None
+        self._text_wrap = None
         self._original_text = None
         self._translated_text = None
         self._translate_btn = None
