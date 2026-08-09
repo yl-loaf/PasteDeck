@@ -2,6 +2,8 @@
 
 > A lightweight, privacy-focused multi-clipboard manager for macOS.
 
+## **Important!!!** read **Installation & Setup**
+
 **PasteDeck** expands your macOS clipboard into a 9-slot power tool that lives in the menu bar. Built with Python and native AppKit APIs, it captures text, rich formatting, images, URLs, file paths, and hex colors—with instant hotkey access, hover Quick Look, in-panel translation, and liquid-glass UI.
 
 ---
@@ -73,45 +75,38 @@ Settings are persisted to `~/.pastedeck-settings.json` and applied at runtime.
 * Menu bar dropdown with refined **PasteDeck** title header.
 * Picker panel titled **PasteDeck** with shortcut subtitle.
 
+### Lightweight
+* PasteDeck uses 75.0MB of RAM and has 0.0% energy impact
+* Raise an **issue** if there are memory leaks
 ---
 
 ## Installation & Setup
 
 ### Prerequisites
 * **macOS** 10.15 (Catalina) or newer
-* **Python** 3.10+ (3.11+ recommended)
 
-### Install dependencies
-```bash
-cd /path/to/PasteDeck
-chmod +x install_pastedeck.sh
-./install_pastedeck.sh
-```
+## Step-by-Step Setup
 
-If the script does not run, use:
-```bash
-sh /path/to/install_pastedeck.sh
-```
-(type `sh `, then drag the file into Terminal.)
+### 1. Launch the App
+* Double-click **PasteDeck.app** to run it for the first time.
+* Wait about **10 seconds** for the initial background setup to finish.
 
-You can also install dependencies manually:
-```bash
-pip3 install -r requirements.txt
-```
+### 2. Bypass macOS Security Warning *(If Prompted)*
+If macOS flags the app as dangerous or untrusted:
+1. Open **Apple menu () > System Settings > Privacy & Security**.
+2. Scroll down to the **Security** section.
+3. Click **Open Anyway** next to the PasteDeck notice.
 
-**Dependencies:** `rumps`, `quickmachotkey`, `pyobjc-core`, `pyobjc-framework-Cocoa`, `pyobjc-framework-Quartz`, `pyobjc-framework-NaturalLanguage`, `certifi`.
+### 3. Grant Accessibility Permissions
+1. Open **Apple menu () > System Settings > Privacy & Security**.
+2. Scroll down and click on **Accessibility**.
+3. Toggle the switch next to **PasteDeck** to **ON**.
+4. If PasteDeck does not show up, click the **(+)** button to add the app to accessibility
 
-### Run (daily use)
-Double-click **`run_pastedeck.command`**, or from Terminal:
-```bash
-./run_pastedeck.command
-```
-or
-```bash
-python3 PasteDeck.py
-```
-
-The installer script installs dependencies only. For a standalone app bundle, use your preferred packaging tool (e.g. py2app / PyInstaller) with the included `icon.icns` and `PasteDeck.spec` as a starting point.
+### 4. Restart the App
+1. Completely quit PasteDeck by pressing **⌘ + Q**.
+2. Reopen the app using **Spotlight** (press **⌘ + Space**, type `PasteDeck`, and press **Return**).
+3. Give it a moment. It should start up and be ready to use
 
 ---
 
