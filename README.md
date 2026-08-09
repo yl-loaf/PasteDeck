@@ -2,6 +2,8 @@
 
 > A lightweight, privacy-focused multi-clipboard manager for macOS.
 
+## **Important!!!** read **Installation & Setup**
+
 **PasteDeck** expands your macOS clipboard into a 9-slot power tool that lives in the menu bar. Built with Python and native AppKit APIs, it captures text, rich formatting, images, URLs, file paths, and hex colors—with instant hotkey access, hover Quick Look, in-panel translation, and liquid-glass UI.
 
 ---
