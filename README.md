@@ -79,39 +79,14 @@ Settings are persisted to `~/.pastedeck-settings.json` and applied at runtime.
 
 ### Prerequisites
 * **macOS** 10.15 (Catalina) or newer
-* **Python** 3.10+ (3.11+ recommended)
 
-### Install dependencies
-```bash
-cd /path/to/PasteDeck
-chmod +x install_pastedeck.sh
-./install_pastedeck.sh
-```
-
-If the script does not run, use:
-```bash
-sh /path/to/install_pastedeck.sh
-```
-(type `sh `, then drag the file into Terminal.)
-
-You can also install dependencies manually:
-```bash
-pip3 install -r requirements.txt
-```
-
-**Dependencies:** `rumps`, `quickmachotkey`, `pyobjc-core`, `pyobjc-framework-Cocoa`, `pyobjc-framework-Quartz`, `pyobjc-framework-NaturalLanguage`, `certifi`.
-
-### Run (daily use)
-Double-click **`run_pastedeck.command`**, or from Terminal:
-```bash
-./run_pastedeck.command
-```
-or
-```bash
-python3 PasteDeck.py
-```
-
-The installer script installs dependencies only. For a standalone app bundle, use your preferred packaging tool (e.g. py2app / PyInstaller) with the included `icon.icns` and `PasteDeck.spec` as a starting point.
+### Setup
+* If PasteDeck.app is flagged as dangerous, go to Apple menu > System Settings > Privacy & Security, scroll down to the security section, and click Open Anyway next to the blocked app's name
+* Double click on the app (may be called PasteDeck) and run for the first time
+* Wait for around 10s
+* Allow Accessibility permissions in Apple menu > System Settings > Privacy & Security, scroll to Accessibility and enable PasteDeck
+* Quit (⌘Q) PasteDeck and launch again from **Spolight** (⌘Space)
+* It may take some time but it should start up
 
 ---
 
