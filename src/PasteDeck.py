@@ -1212,11 +1212,15 @@ def minimize_terminal_window() -> None:
 # ---------------------------------------------------------------------------
 
 def is_accessibility_trusted(prompt: bool = False) -> bool:
-    """Return True if this process is trusted for Accessibility (global monitors)."""
+    """Return True if *this process* is trusted for Accessibility (global monitors).
+
+    Note: when running as `python3 script.py`, TCC checks the Python binary
+    (e.g. /usr/local/bin/python3), not Terminal and not the .py file. Granting
+    Accessibility to Terminal alone is not enough.
+    """
     try:
         from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions
         if prompt:
-            # kAXTrustedCheckOptionPrompt — show system dialog if not yet decided
             try:
                 from Foundation import NSDictionary
                 opts = NSDictionary.dictionaryWithObject_forKey_(
@@ -1228,8 +1232,7 @@ def is_accessibility_trusted(prompt: bool = False) -> bool:
         return bool(AXIsProcessTrusted())
     except Exception as e:
         print(f"[DEBUG] Accessibility check failed: {e}")
-        # Fall back: assume trusted so the app still launches; global monitors
-        # will simply not receive events if the user has not granted permission.
+        # Don't block launch if the API is unavailable.
         return True
 
 
@@ -1261,11 +1264,38 @@ def open_accessibility_settings() -> None:
 def _pump_runloop(seconds: float = 0.4) -> None:
     """Process Cocoa events for a short while (keeps splash responsive)."""
     end = time.time() + max(0.0, seconds)
+    # EventTracking + Default so button clicks and key events are delivered.
+    try:
+        from Foundation import NSEventTrackingRunLoopMode
+        modes = (NSDefaultRunLoopMode, NSEventTrackingRunLoopMode)
+    except Exception:
+        modes = (NSDefaultRunLoopMode,)
     while time.time() < end:
-        NSRunLoop.currentRunLoop().runMode_beforeDate_(
-            NSDefaultRunLoopMode,
-            NSDate.dateWithTimeIntervalSinceNow_(0.05),
-        )
+        for mode in modes:
+            NSRunLoop.currentRunLoop().runMode_beforeDate_(
+                mode,
+                NSDate.dateWithTimeIntervalSinceNow_(0.03),
+            )
+
+
+class LoadingSplashPanel(NSPanel):
+    """Borderless splash that can become key so buttons/Escape work."""
+
+    def canBecomeKeyWindow(self):
+        return True
+
+    def canBecomeMainWindow(self):
+        return True
+
+    def keyDown_(self, event):
+        # Escape / Return → dismiss
+        code = event.keyCode()
+        if code in (53, 36, 76):  # Escape, Return, keypad Enter
+            ctrl = getattr(self, "_controller", None)
+            if ctrl is not None:
+                ctrl.continueAnyway_(None)
+            return
+        objc.super(LoadingSplashPanel, self).keyDown_(event)
 
 
 class LoadingSplashController(NSObject):
@@ -1277,6 +1307,7 @@ class LoadingSplashController(NSObject):
             return None
         self.window = None
         self._status = None
+        self._detail = None
         self._spinner = None
         self._btn_settings = None
         self._btn_continue = None
@@ -1285,22 +1316,38 @@ class LoadingSplashController(NSObject):
         return self
 
     def show(self):
-        w, h = 320.0, 168.0
+        import sys
+
+        # Ensure we can show a window and receive clicks before rumps takes over.
+        nsapp = NSApplication.sharedApplication()
+        try:
+            # 0 = NSApplicationActivationPolicyRegular (needed for key window + buttons)
+            nsapp.setActivationPolicy_(0)
+        except Exception:
+            pass
+        try:
+            nsapp.finishLaunching()
+        except Exception:
+            pass
+
+        w, h = 360.0, 200.0
         screen = NSScreen.mainScreen()
         sf = screen.frame() if screen else NSMakeRect(0, 0, 1280, 800)
         x = sf.origin.x + (sf.size.width - w) / 2.0
         y = sf.origin.y + (sf.size.height - h) / 2.0 + 40.0
         frame = NSMakeRect(x, y, w, h)
 
-        panel = NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+        panel = LoadingSplashPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             frame, NSWindowStyleMaskBorderless, NSBackingStoreBuffered, False
         )
+        panel._controller = self
         panel.setLevel_(25)
         panel.setOpaque_(False)
         panel.setBackgroundColor_(NSColor.clearColor())
         panel.setHasShadow_(True)
         panel.setHidesOnDeactivate_(False)
         panel.setCanHide_(False)
+        panel.setAcceptsMouseMovedEvents_(True)
         panel.setCollectionBehavior_(128 | 256)  # can join all spaces + stationary
         try:
             panel.setAppearance_(NSAppearance.appearanceNamed_("NSAppearanceNameDarkAqua"))
@@ -1321,22 +1368,22 @@ class LoadingSplashController(NSObject):
         )
         panel.setContentView_(content)
 
-        # Soft rim (matches picker / Quick Look)
+        # Soft rim — must not steal clicks
+        rim = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
+        rim.setWantsLayer_(True)
+        rim.layer().setCornerRadius_(16.0)
+        rim.layer().setBorderWidth_(1.0)
+        rim.layer().setBorderColor_(
+            NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.10).CGColor()
+        )
+        rim.layer().setMasksToBounds_(True)
         try:
-            from AppKit import NSBezierPath, NSEdgeInsetsMake, NSImageResizingModeStretch
-            rim = NSView.alloc().initWithFrame_(NSMakeRect(0, 0, w, h))
-            rim.setWantsLayer_(True)
-            rim.layer().setCornerRadius_(16.0)
-            rim.layer().setBorderWidth_(1.0)
-            rim.layer().setBorderColor_(
-                NSColor.colorWithCalibratedWhite_alpha_(1.0, 0.10).CGColor()
-            )
-            rim.layer().setMasksToBounds_(True)
-            content.addSubview_(rim)
+            rim.setHitTests_(False)
         except Exception:
             pass
+        content.addSubview_(rim)
 
-        title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, h - 52, w - 40, 28))
+        title = NSTextField.alloc().initWithFrame_(NSMakeRect(20, h - 48, w - 40, 28))
         title.setStringValue_("PasteDeck")
         title.setBezeled_(False)
         title.setDrawsBackground_(False)
@@ -1347,7 +1394,7 @@ class LoadingSplashController(NSObject):
         title.setAlignment_(1)
         content.addSubview_(title)
 
-        status = NSTextField.alloc().initWithFrame_(NSMakeRect(20, h - 84, w - 40, 22))
+        status = NSTextField.alloc().initWithFrame_(NSMakeRect(20, h - 78, w - 40, 22))
         status.setStringValue_("Starting…")
         status.setBezeled_(False)
         status.setDrawsBackground_(False)
@@ -1359,8 +1406,21 @@ class LoadingSplashController(NSObject):
         content.addSubview_(status)
         self._status = status
 
+        detail = NSTextField.alloc().initWithFrame_(NSMakeRect(24, 56, w - 48, 36))
+        detail.setStringValue_("")
+        detail.setBezeled_(False)
+        detail.setDrawsBackground_(False)
+        detail.setEditable_(False)
+        detail.setSelectable_(False)
+        detail.setFont_(NSFont.systemFontOfSize_(11))
+        detail.setTextColor_(NSColor.colorWithCalibratedWhite_alpha_(0.55, 1.0))
+        detail.setAlignment_(1)
+        detail.setHidden_(True)
+        content.addSubview_(detail)
+        self._detail = detail
+
         spinner = NSProgressIndicator.alloc().initWithFrame_(
-            NSMakeRect((w - 28) / 2.0, 48, 28, 28)
+            NSMakeRect((w - 28) / 2.0, 52, 28, 28)
         )
         spinner.setStyle_(1)  # spinning
         spinner.setDisplayedWhenStopped_(False)
@@ -1369,14 +1429,14 @@ class LoadingSplashController(NSObject):
         content.addSubview_(spinner)
         self._spinner = spinner
 
-        # Accessibility action buttons (hidden until needed)
-        btn_w, btn_h = 132.0, 28.0
-        gap = 10.0
+        # Action buttons (hidden until accessibility prompt)
+        btn_w, btn_h = 140.0, 30.0
+        gap = 12.0
         total_btns = btn_w * 2 + gap
         bx0 = (w - total_btns) / 2.0
 
         btn_settings = NSButton.alloc().initWithFrame_(
-            NSMakeRect(bx0, 22, btn_w, btn_h)
+            NSMakeRect(bx0, 18, btn_w, btn_h)
         )
         btn_settings.setTitle_("Open Settings")
         btn_settings.setBezelStyle_(1)
@@ -1387,43 +1447,60 @@ class LoadingSplashController(NSObject):
         self._btn_settings = btn_settings
 
         btn_continue = NSButton.alloc().initWithFrame_(
-            NSMakeRect(bx0 + btn_w + gap, 22, btn_w, btn_h)
+            NSMakeRect(bx0 + btn_w + gap, 18, btn_w, btn_h)
         )
-        btn_continue.setTitle_("Continue Anyway")
+        btn_continue.setTitle_("Continue")
         btn_continue.setBezelStyle_(1)
         btn_continue.setTarget_(self)
         btn_continue.setAction_("continueAnyway:")
         btn_continue.setHidden_(True)
+        btn_continue.setKeyEquivalent_("\r")  # Return activates Continue
         content.addSubview_(btn_continue)
         self._btn_continue = btn_continue
 
         self.window = panel
-        NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
+        nsapp.activateIgnoringOtherApps_(True)
+        panel.center()
         panel.makeKeyAndOrderFront_(None)
         panel.orderFrontRegardless()
+        # Force key status for button delivery
+        try:
+            panel.makeFirstResponder_(btn_continue)
+        except Exception:
+            pass
 
     def setStatus_(self, text: str):
         if self._status is not None:
             self._status.setStringValue_(str(text))
 
     def showAccessibilityPrompt(self):
-        """Switch splash into accessibility-needed mode."""
+        """Switch splash into accessibility-needed mode (non-blocking)."""
+        import sys
         if self._spinner is not None:
             self._spinner.stopAnimation_(None)
             self._spinner.setHidden_(True)
-        self.setStatus_("Accessibility access required for global hotkeys & picker.")
+        self.setStatus_("Accessibility needed for picker hotkeys")
+        exe = sys.executable or "python3"
+        # Keep path readable
+        if len(exe) > 54:
+            exe = "…" + exe[-52:]
+        if self._detail is not None:
+            self._detail.setStringValue_(
+                f"Enable Accessibility for:\n{exe}"
+            )
+            self._detail.setHidden_(False)
         if self._btn_settings is not None:
             self._btn_settings.setHidden_(False)
         if self._btn_continue is not None:
             self._btn_continue.setHidden_(False)
-        # Taller message area – nudge status up a bit for multi-line feel
-        if self._status is not None:
-            f = self._status.frame()
-            self._status.setFrame_(NSMakeRect(f.origin.x, 58, f.size.width, 40))
-            self._status.setFont_(NSFont.systemFontOfSize_(12))
+            try:
+                self.window.makeFirstResponder_(self._btn_continue)
+            except Exception:
+                pass
 
     def openSettings_(self, sender):
         open_accessibility_settings()
+        # Don't dismiss — user may toggle the checkbox then return
 
     def continueAnyway_(self, sender):
         self._continue_requested = True
@@ -1432,6 +1509,7 @@ class LoadingSplashController(NSObject):
         if self._dismissed:
             return
         self._dismissed = True
+        self._continue_requested = True
         if self._spinner is not None:
             try:
                 self._spinner.stopAnimation_(None)
@@ -1443,34 +1521,44 @@ class LoadingSplashController(NSObject):
 
 
 def show_startup_flow() -> None:
-    """Show loading splash, check Accessibility, then dismiss."""
+    """Show loading splash, check Accessibility, then always continue."""
     splash = LoadingSplashController.alloc().init()
     splash.show()
-    _pump_runloop(0.25)
+    _pump_runloop(0.2)
 
     splash.setStatus_("Checking Accessibility…")
-    _pump_runloop(0.15)
+    _pump_runloop(0.1)
 
-    trusted = is_accessibility_trusted(prompt=True)
+    trusted = is_accessibility_trusted(prompt=False)
+    if not trusted:
+        # One system prompt (may no-op if already decided)
+        trusted = is_accessibility_trusted(prompt=True)
+
     if trusted:
+        print("[DEBUG] Accessibility: trusted")
         splash.setStatus_("Ready")
-        _pump_runloop(0.35)
+        _pump_runloop(0.3)
         splash.dismiss()
         return
 
-    # Not trusted — offer Settings + Continue
-    print("[DEBUG] Accessibility is not enabled for PasteDeck")
+    # Not trusted for *this* executable — warn, but never trap the user.
+    import sys
+    print(
+        f"[DEBUG] Accessibility NOT trusted for this process "
+        f"(executable={sys.executable!r}). "
+        f"Add that binary in System Settings → Privacy & Security → Accessibility."
+    )
     splash.showAccessibilityPrompt()
-    # Wait until user clicks Continue Anyway, or Accessibility becomes trusted
-    deadline = time.time() + 90.0  # don't block forever
+    # Short wait: Continue / Return / Escape, or auto-continue after a few seconds
+    deadline = time.time() + 12.0
     while time.time() < deadline:
-        if splash._continue_requested:
+        if splash._continue_requested or splash._dismissed:
             break
         if is_accessibility_trusted(prompt=False):
             splash.setStatus_("Accessibility granted — starting…")
-            _pump_runloop(0.4)
+            _pump_runloop(0.35)
             break
-        _pump_runloop(0.2)
+        _pump_runloop(0.15)
     splash.dismiss()
 
 
