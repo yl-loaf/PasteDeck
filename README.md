@@ -85,13 +85,28 @@ Settings are persisted to `~/.pastedeck-settings.json` and applied at runtime.
 ### Prerequisites
 * **macOS** 10.15 (Catalina) or newer
 
-### Setup
-* If PasteDeck.app is flagged as dangerous, go to Apple menu > System Settings > Privacy & Security, scroll down to the security section, and click Open Anyway next to the blocked app's name
-* Double click on the app (may be called PasteDeck) and run for the first time
-* Wait for around 10s
-* Allow Accessibility permissions in Apple menu > System Settings > Privacy & Security, scroll to Accessibility and enable PasteDeck
-* Quit (⌘Q) PasteDeck and launch again from **Spolight** (⌘Space)
-* It may take some time but it should start up
+## Step-by-Step Setup
+
+### 1. Launch the App
+* Double-click **PasteDeck.app** to run it for the first time.
+* Wait about **10 seconds** for the initial background setup to finish.
+
+### 2. Bypass macOS Security Warning *(If Prompted)*
+If macOS flags the app as dangerous or untrusted:
+1. Open **Apple menu () > System Settings > Privacy & Security**.
+2. Scroll down to the **Security** section.
+3. Click **Open Anyway** next to the PasteDeck notice.
+
+### 3. Grant Accessibility Permissions
+1. Open **Apple menu () > System Settings > Privacy & Security**.
+2. Scroll down and click on **Accessibility**.
+3. Toggle the switch next to **PasteDeck** to **ON**.
+4. If PasteDeck does not show up, click the **(+)** button to add the app to accessibility
+
+### 4. Restart the App
+1. Completely quit PasteDeck by pressing **⌘ + Q**.
+2. Reopen the app using **Spotlight** (press **⌘ + Space**, type `PasteDeck`, and press **Return**).
+3. Give it a moment. It should start up and be ready to use
 
 ---
 
