@@ -15,7 +15,7 @@
 
 <div class="node">
   <a name="PasteDeck.py"></a>
-  <a target="code" href="///Users/cheeyl/Documents/GitHub/PasteDeck/PasteDeck.py" type="text/plain"><tt>PasteDeck.py</tt></a>
+  <a target="code" href="///Users/cheeyl/Documents/GitHub/PasteDeck/src/PasteDeck.py" type="text/plain"><tt>PasteDeck.py</tt></a>
 <span class="moduletype">Script</span>  <div class="import">
 imports:
     <a href="#AppKit">AppKit</a>
@@ -45,6 +45,7 @@ imports:
  &#8226;   <a href="#AppKit.NSPasteboardTypeString">AppKit.NSPasteboardTypeString</a>
  &#8226;   <a href="#AppKit.NSPasteboardTypeTIFF">AppKit.NSPasteboardTypeTIFF</a>
  &#8226;   <a href="#AppKit.NSPopUpButton">AppKit.NSPopUpButton</a>
+ &#8226;   <a href="#AppKit.NSProgressIndicator">AppKit.NSProgressIndicator</a>
  &#8226;   <a href="#AppKit.NSRunningApplication">AppKit.NSRunningApplication</a>
  &#8226;   <a href="#AppKit.NSScreen">AppKit.NSScreen</a>
  &#8226;   <a href="#AppKit.NSScrollView">AppKit.NSScrollView</a>
@@ -66,14 +67,21 @@ imports:
  &#8226;   <a href="#AppKit.NSWindowStyleMaskMiniaturizable">AppKit.NSWindowStyleMaskMiniaturizable</a>
  &#8226;   <a href="#AppKit.NSWindowStyleMaskTitled">AppKit.NSWindowStyleMaskTitled</a>
  &#8226;   <a href="#AppKit.NSWorkspace">AppKit.NSWorkspace</a>
+ &#8226;   <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#ApplicationServices.AXIsProcessTrusted">ApplicationServices.AXIsProcessTrusted</a>
+ &#8226;   <a href="#ApplicationServices.AXIsProcessTrustedWithOptions">ApplicationServices.AXIsProcessTrustedWithOptions</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Foundation.NSAttributedString">Foundation.NSAttributedString</a>
  &#8226;   <a href="#Foundation.NSData">Foundation.NSData</a>
+ &#8226;   <a href="#Foundation.NSDate">Foundation.NSDate</a>
+ &#8226;   <a href="#Foundation.NSDefaultRunLoopMode">Foundation.NSDefaultRunLoopMode</a>
+ &#8226;   <a href="#Foundation.NSDictionary">Foundation.NSDictionary</a>
  &#8226;   <a href="#Foundation.NSMakeRange">Foundation.NSMakeRange</a>
  &#8226;   <a href="#Foundation.NSMutableAttributedString">Foundation.NSMutableAttributedString</a>
  &#8226;   <a href="#Foundation.NSMutableDictionary">Foundation.NSMutableDictionary</a>
  &#8226;   <a href="#Foundation.NSObject">Foundation.NSObject</a>
  &#8226;   <a href="#Foundation.NSOperationQueue">Foundation.NSOperationQueue</a>
+ &#8226;   <a href="#Foundation.NSRunLoop">Foundation.NSRunLoop</a>
  &#8226;   <a href="#Foundation.NSTimer">Foundation.NSTimer</a>
  &#8226;   <a href="#Foundation.NSURL">Foundation.NSURL</a>
  &#8226;   <a href="#NaturalLanguage">NaturalLanguage</a>
@@ -406,6 +414,7 @@ imports:
  &#8226;   <a href="#AppKit.NSPasteboardTypeString">AppKit.NSPasteboardTypeString</a>
  &#8226;   <a href="#AppKit.NSPasteboardTypeTIFF">AppKit.NSPasteboardTypeTIFF</a>
  &#8226;   <a href="#AppKit.NSPopUpButton">AppKit.NSPopUpButton</a>
+ &#8226;   <a href="#AppKit.NSProgressIndicator">AppKit.NSProgressIndicator</a>
  &#8226;   <a href="#AppKit.NSRunAlertPanel">AppKit.NSRunAlertPanel</a>
  &#8226;   <a href="#AppKit.NSRunningApplication">AppKit.NSRunningApplication</a>
  &#8226;   <a href="#AppKit.NSScreen">AppKit.NSScreen</a>
@@ -449,6 +458,7 @@ imported by:
  &#8226;   <a href="#AppKit._inlines">AppKit._inlines</a>
  &#8226;   <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#AppKit._nsapp">AppKit._nsapp</a>
+ &#8226;   <a href="#Cocoa">Cocoa</a>
  &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
  &#8226;   <a href="#PyObjCTools.AppHelper">PyObjCTools.AppHelper</a>
  &#8226;   <a href="#Quartz">Quartz</a>
@@ -874,6 +884,18 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="AppKit.NSProgressIndicator"></a>
+  <a target="code" href="" type="text/plain"><tt>AppKit.NSProgressIndicator</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="AppKit.NSRunAlertPanel"></a>
   <a target="code" href="" type="text/plain"><tt>AppKit.NSRunAlertPanel</tt></a>
 <span class="moduletype">MissingModule</span>  <div class="import">
@@ -1269,6 +1291,68 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="ApplicationServices"></a>
+  <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/ApplicationServices/__init__.py" type="text/plain"><tt>ApplicationServices</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#ApplicationServices.AXIsProcessTrusted">ApplicationServices.AXIsProcessTrusted</a>
+ &#8226;   <a href="#ApplicationServices.AXIsProcessTrustedWithOptions">ApplicationServices.AXIsProcessTrustedWithOptions</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#Quartz">Quartz</a>
+ &#8226;   <a href="#objc">objc</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#PasteDeck.py">PasteDeck.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ApplicationServices.AXIsProcessTrusted"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.AXIsProcessTrusted</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="ApplicationServices.AXIsProcessTrustedWithOptions"></a>
+  <a target="code" href="" type="text/plain"><tt>ApplicationServices.AXIsProcessTrustedWithOptions</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="Cocoa"></a>
+  <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/Cocoa/__init__.py" type="text/plain"><tt>Cocoa</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#AppKit">AppKit</a>
+ &#8226;   <a href="#objc">objc</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="CoreFoundation"></a>
   <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/CoreFoundation/__init__.py" type="text/plain"><tt>CoreFoundation</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
@@ -1289,6 +1373,7 @@ imported by:
  &#8226;   <a href="#CoreFoundation._inlines">CoreFoundation._inlines</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
  &#8226;   <a href="#CoreFoundation._static">CoreFoundation._static</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
  &#8226;   <a href="#Quartz.CoreVideo">Quartz.CoreVideo</a>
@@ -1358,6 +1443,65 @@ imports:
   <div class="import">
 imported by:
     <a href="#CoreFoundation">CoreFoundation</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="CoreText"></a>
+  <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/CoreText/__init__.py" type="text/plain"><tt>CoreText</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#CoreFoundation">CoreFoundation</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._manual">CoreText._manual</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
+ &#8226;   <a href="#Quartz">Quartz</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._manual">CoreText._manual</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="CoreText._manual"></a>
+  <tt>CoreText._manual</tt> <span class="moduletype"><tt>/Users/cheeyl/Library/Python/3.14/lib/python/site-packages/CoreText/_manual.cpython-314-darwin.so</tt></span>  <div class="import">
+imports:
+    <a href="#CoreText">CoreText</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#CoreText">CoreText</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="CoreText._metadata"></a>
+  <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/CoreText/_metadata.py" type="text/plain"><tt>CoreText._metadata</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#CoreText">CoreText</a>
 
   </div>
 
@@ -1468,6 +1612,7 @@ imports:
  &#8226;   <a href="#Foundation.NSData">Foundation.NSData</a>
  &#8226;   <a href="#Foundation.NSDate">Foundation.NSDate</a>
  &#8226;   <a href="#Foundation.NSDefaultRunLoopMode">Foundation.NSDefaultRunLoopMode</a>
+ &#8226;   <a href="#Foundation.NSDictionary">Foundation.NSDictionary</a>
  &#8226;   <a href="#Foundation.NSLog">Foundation.NSLog</a>
  &#8226;   <a href="#Foundation.NSMakeRange">Foundation.NSMakeRange</a>
  &#8226;   <a href="#Foundation.NSMakeRect">Foundation.NSMakeRect</a>
@@ -1567,6 +1712,7 @@ imported by:
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
     <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
  &#8226;   <a href="#PyObjCTools.AppHelper">PyObjCTools.AppHelper</a>
  &#8226;   <a href="#rumps.rumps">rumps.rumps</a>
 
@@ -1580,8 +1726,21 @@ imported by:
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
     <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
  &#8226;   <a href="#PyObjCTools.AppHelper">PyObjCTools.AppHelper</a>
  &#8226;   <a href="#rumps.rumps">rumps.rumps</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="Foundation.NSDictionary"></a>
+  <a target="code" href="" type="text/plain"><tt>Foundation.NSDictionary</tt></a>
+<span class="moduletype">MissingModule</span>  <div class="import">
+imported by:
+    <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
 
   </div>
 
@@ -1695,6 +1854,7 @@ imported by:
 <span class="moduletype">MissingModule</span>  <div class="import">
 imported by:
     <a href="#Foundation">Foundation</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
  &#8226;   <a href="#PyObjCTools.AppHelper">PyObjCTools.AppHelper</a>
  &#8226;   <a href="#rumps.rumps">rumps.rumps</a>
 
@@ -1936,6 +2096,64 @@ imported by:
 </div>
 
 <div class="node">
+  <a name="HIServices"></a>
+  <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/HIServices/__init__.py" type="text/plain"><tt>HIServices</tt></a>
+<span class="moduletype">Package</span>  <div class="import">
+imports:
+    <a href="#Cocoa">Cocoa</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._HIServices">HIServices._HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._HIServices">HIServices._HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="HIServices._HIServices"></a>
+  <tt>HIServices._HIServices</tt> <span class="moduletype"><tt>/Users/cheeyl/Library/Python/3.14/lib/python/site-packages/HIServices/_HIServices.cpython-314-darwin.so</tt></span>  <div class="import">
+imports:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+
+</div>
+
+<div class="node">
+  <a name="HIServices._metadata"></a>
+  <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/HIServices/_metadata.py" type="text/plain"><tt>HIServices._metadata</tt></a>
+<span class="moduletype">SourceModule</span>  <div class="import">
+imports:
+    <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#objc">objc</a>
+ &#8226;   <a href="#sys">sys</a>
+ &#8226;   <a href="#typing">typing</a>
+
+  </div>
+  <div class="import">
+imported by:
+    <a href="#HIServices">HIServices</a>
+
+  </div>
+
+</div>
+
+<div class="node">
   <a name="NaturalLanguage"></a>
   <a target="code" href="///Users/cheeyl/Library/Python/3.14/lib/python/site-packages/NaturalLanguage/__init__.py" type="text/plain"><tt>NaturalLanguage</tt></a>
 <span class="moduletype">Package</span>  <div class="import">
@@ -2147,7 +2365,9 @@ imports:
   </div>
   <div class="import">
 imported by:
-    <a href="#PasteDeck.py">PasteDeck.py</a>
+    <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
  &#8226;   <a href="#Quartz">Quartz</a>
  &#8226;   <a href="#Quartz.CoreGraphics">Quartz.CoreGraphics</a>
  &#8226;   <a href="#Quartz.CoreGraphics._contextmanager">Quartz.CoreGraphics._contextmanager</a>
@@ -12069,9 +12289,13 @@ imported by:
     <a href="#AppKit">AppKit</a>
  &#8226;   <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#AppKit._nsapp">AppKit._nsapp</a>
+ &#8226;   <a href="#ApplicationServices">ApplicationServices</a>
+ &#8226;   <a href="#Cocoa">Cocoa</a>
  &#8226;   <a href="#CoreFoundation">CoreFoundation</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
  &#8226;   <a href="#CoreFoundation._static">CoreFoundation._static</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
  &#8226;   <a href="#ExceptionHandling">ExceptionHandling</a>
  &#8226;   <a href="#ExceptionHandling._metadata">ExceptionHandling._metadata</a>
  &#8226;   <a href="#Foundation">Foundation</a>
@@ -12079,6 +12303,8 @@ imported by:
  &#8226;   <a href="#Foundation._nsindexset">Foundation._nsindexset</a>
  &#8226;   <a href="#Foundation._nsobject">Foundation._nsobject</a>
  &#8226;   <a href="#Foundation._nsurl">Foundation._nsurl</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
  &#8226;   <a href="#NaturalLanguage">NaturalLanguage</a>
  &#8226;   <a href="#NaturalLanguage._metadata">NaturalLanguage._metadata</a>
  &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
@@ -14730,12 +14956,16 @@ imported by:
  &#8226;   <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#CoreFoundation">CoreFoundation</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
+ &#8226;   <a href="#CoreText">CoreText</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
  &#8226;   <a href="#ExceptionHandling">ExceptionHandling</a>
  &#8226;   <a href="#ExceptionHandling._metadata">ExceptionHandling._metadata</a>
  &#8226;   <a href="#Foundation">Foundation</a>
  &#8226;   <a href="#Foundation._metadata">Foundation._metadata</a>
  &#8226;   <a href="#Foundation._nsobject">Foundation._nsobject</a>
  &#8226;   <a href="#Foundation._nsurl">Foundation._nsurl</a>
+ &#8226;   <a href="#HIServices">HIServices</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
  &#8226;   <a href="#NaturalLanguage">NaturalLanguage</a>
  &#8226;   <a href="#NaturalLanguage._metadata">NaturalLanguage._metadata</a>
  &#8226;   <a href="#PasteDeck.py">PasteDeck.py</a>
@@ -15398,8 +15628,10 @@ imports:
 imported by:
     <a href="#AppKit._metadata">AppKit._metadata</a>
  &#8226;   <a href="#CoreFoundation._metadata">CoreFoundation._metadata</a>
+ &#8226;   <a href="#CoreText._metadata">CoreText._metadata</a>
  &#8226;   <a href="#ExceptionHandling._metadata">ExceptionHandling._metadata</a>
  &#8226;   <a href="#Foundation._metadata">Foundation._metadata</a>
+ &#8226;   <a href="#HIServices._metadata">HIServices._metadata</a>
  &#8226;   <a href="#NaturalLanguage._metadata">NaturalLanguage._metadata</a>
  &#8226;   <a href="#Quartz.CoreGraphics._metadata">Quartz.CoreGraphics._metadata</a>
  &#8226;   <a href="#Quartz.CoreVideo._metadata">Quartz.CoreVideo._metadata</a>

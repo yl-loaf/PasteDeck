@@ -1,3 +1,3 @@
 ([('PasteDeck',
-   '/Users/cheeyl/Documents/GitHub/PasteDeck/dist/PasteDeck',
+   '/Users/cheeyl/Documents/GitHub/PasteDeck/src/dist/PasteDeck',
    'EXECUTABLE')],)
