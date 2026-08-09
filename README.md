@@ -73,6 +73,9 @@ Settings are persisted to `~/.pastedeck-settings.json` and applied at runtime.
 * Menu bar dropdown with refined **PasteDeck** title header.
 * Picker panel titled **PasteDeck** with shortcut subtitle.
 
+### Lightweight
+* PasteDeck uses 75.0MB of RAM and has 0.0% energy impact
+* Raise an **issue** if there are memory leaks
 ---
 
 ## Installation & Setup
