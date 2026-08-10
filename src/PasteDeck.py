@@ -1520,6 +1520,16 @@ class LoadingSplashController(NSObject):
             self.window = None
 
 
+def set_accessory_activation_policy() -> None:
+    """Hide from Dock: menu-bar style app (NSApplicationActivationPolicyAccessory)."""
+    try:
+        nsapp = NSApplication.sharedApplication()
+        # 1 = NSApplicationActivationPolicyAccessory (no Dock icon)
+        nsapp.setActivationPolicy_(1)
+    except Exception as e:
+        print(f"[DEBUG] setActivationPolicy(Accessory) failed: {e}")
+
+
 def show_startup_flow() -> None:
     """Show loading splash, check Accessibility, then always continue."""
     splash = LoadingSplashController.alloc().init()
@@ -1539,6 +1549,7 @@ def show_startup_flow() -> None:
         splash.setStatus_("Ready")
         _pump_runloop(0.3)
         splash.dismiss()
+        set_accessory_activation_policy()
         return
 
     # Not trusted for *this* executable — warn, but never trap the user.
@@ -1560,6 +1571,7 @@ def show_startup_flow() -> None:
             break
         _pump_runloop(0.15)
     splash.dismiss()
+    set_accessory_activation_policy()
 
 
 # ---------------------------------------------------------------------------
@@ -4123,10 +4135,15 @@ def main() -> None:
         show_startup_flow()
     except Exception as e:
         print(f"[DEBUG] Startup splash / accessibility check failed: {e}")
+        # Ensure Dock-hide even if splash path failed
+        set_accessory_activation_policy()
 
     settings = load_settings()
     store = ClipboardStore(settings)
     app = MultiClipboardApp(store)
+
+    # Guarantee accessory policy before the menu-bar app runs
+    set_accessory_activation_policy()
 
     threading.Timer(0.5, minimize_terminal_window).start()
 
