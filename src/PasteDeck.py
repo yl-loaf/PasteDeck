@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Multi-clipboard manager for macOS – rich text, visual previews, pinned clips,
    privacy controls, Instant In-Line Quick Look (hover a slot to peek),
-   and Translate controls inside Quick Look (Apple language detection + MyMemory).
+   Translate controls inside Quick Look (Apple language detection + MyMemory),
+   and OCR for image slots (pytesseract) with animated image→text transition.
    (Network sync removed)
 """
 
@@ -139,6 +140,7 @@ DEFAULT_SETTINGS = {
     # Behaviour
     "poll_interval": 0.4,
     "enable_translate": True,
+    "enable_ocr": True,                 # OCR button on image Quick Look (pytesseract)
     "auto_clear_unpinned_minutes": 0,   # 0 = never
     "show_slot_numbers": True,
     "sound_on_paste": False,
@@ -1014,6 +1016,86 @@ def translate_text(text: str, source: str = "auto", target: str | None = None) -
         return None, f"Translation failed ({google_err})"
 
 
+def _resolve_tesseract_cmd() -> str | None:
+    """Find the tesseract binary (PATH + common Homebrew locations)."""
+    import shutil
+    found = shutil.which("tesseract")
+    if found:
+        return found
+    for candidate in (
+        "/opt/homebrew/bin/tesseract",      # Apple Silicon Homebrew
+        "/usr/local/bin/tesseract",         # Intel Homebrew
+        "/usr/bin/tesseract",
+        str(Path.home() / "homebrew/bin/tesseract"),
+    ):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
+def ocr_image_path(path: Path | str) -> tuple[str | None, str | None]:
+    """Run Tesseract OCR on an image file. Returns (text, short_error).
+
+    Requires: `pip install pytesseract Pillow` and the Tesseract binary
+    (`brew install tesseract` on macOS).
+    """
+    import sys
+    path = Path(path)
+    if not path.is_file():
+        return None, "Image file missing"
+    try:
+        import pytesseract
+        from PIL import Image
+    except ImportError as e:
+        missing = "pytesseract" if "pytesseract" in str(e).lower() else "Pillow"
+        return None, f"pip install {missing} (and brew install tesseract)"
+    try:
+        cmd = _resolve_tesseract_cmd()
+        if cmd:
+            pytesseract.pytesseract.tesseract_cmd = cmd
+        else:
+            return None, "Tesseract not found — brew install tesseract"
+
+        img = Image.open(path)
+        if img.mode not in ("RGB", "L", "RGBA"):
+            img = img.convert("RGB")
+        # Flatten transparency onto white so dark text stays readable
+        if img.mode == "RGBA":
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[-1])
+            img = bg
+        w, h = img.size
+        if max(w, h) < 400:
+            scale = max(2, int(400 / max(w, h, 1)))
+            try:
+                resample = Image.Resampling.LANCZOS
+            except AttributeError:
+                resample = Image.LANCZOS
+            img = img.resize((w * scale, h * scale), resample)
+        # Prefer English; fall back to whatever is installed
+        try:
+            text = pytesseract.image_to_string(img, lang="eng")
+        except Exception:
+            text = pytesseract.image_to_string(img)
+        text = (text or "").strip()
+        if not text:
+            return None, "No text detected in image"
+        return text, None
+    except Exception as e:
+        msg = str(e)
+        print(f"[PasteDeck] OCR error: {type(e).__name__}: {msg}", file=sys.stderr, flush=True)
+        low = msg.lower()
+        name = type(e).__name__
+        if (
+            "tesseract is not installed" in low
+            or "TesseractNotFoundError" in name
+            or "tesseractnotfound" in low
+            or "no such file" in low and "tesseract" in low
+        ):
+            return None, "Tesseract not found — brew install tesseract"
+        return None, (msg[:90] if msg else "OCR failed")
+
+
 def read_pasteboard() -> dict:
     pb = NSPasteboard.generalPasteboard()
     result = {
@@ -1691,8 +1773,8 @@ class ClipboardStore:
         sensitive = is_sensitive_source(bundle_id) if detect else False
 
         # Prefer real file paths from Finder over incidental icon/thumbnail image data.
-        # When you copy a .py (or any non-image) file, macOS often also puts the
-        # file icon as TIFF/PNG on the pasteboard – that must not win.
+        # When you copy a file, macOS often also puts a 512×512 icon (or Quick Look
+        # preview) as TIFF/PNG on the pasteboard – that must not win over the real file.
         file_paths = pb_data.get("file_paths") or []
         preferred_path = None
         for p in file_paths:
@@ -1706,16 +1788,26 @@ class ClipboardStore:
 
         if preferred_path is not None:
             ext = preferred_path.suffix.lower()
-            if ext not in IMAGE_PREVIEW_EXTS:
+            if ext in IMAGE_PREVIEW_EXTS:
+                # Image file from Finder: load the real pixels from disk.
+                # Pasteboard image data is almost always the generic icon / thumbnail.
+                try:
+                    disk_img = NSImage.alloc().initWithContentsOfFile_(str(preferred_path))
+                    if disk_img is not None:
+                        sz = disk_img.size()
+                        if float(sz.width) > 0 and float(sz.height) > 0:
+                            self._push_image(disk_img, sensitive=sensitive)
+                            return
+                except Exception:
+                    pass
+                # Fall through to pasteboard image only if disk load failed
+            else:
                 # Non-image file → store as path text so Quick Look can show content
                 text = str(preferred_path)
-                rtf = None
-                html = None
                 if detect and not sensitive and looks_like_secret(text):
                     # looks_like_secret already rejects paths, but keep the guard
                     sensitive = True
                 kind, color, url_title = self._classify(text)
-                has_style = False
                 with self._lock:
                     self._slots = [
                         s for s in self._slots
@@ -1748,9 +1840,11 @@ class ClipboardStore:
                     self._slots = new_slots
                 self.save()
                 return
-            # else: image file from Finder – fall through and use the image data if present
 
         if pb_data.get("image") is not None:
+            # Pure image copy (Preview, screenshot, browser) — no file path.
+            # Still reject obvious Finder-style icon sizes when a path was present
+            # but disk load failed above (already fell through).
             self._push_image(pb_data["image"], sensitive=sensitive)
             return
 
@@ -2041,6 +2135,12 @@ class QuickLookPreviewPanel(NSPanel):
         self._detected_lang = None
         self._target_lang = "en"
         self._translating = False
+        self._image_view = None
+        self._ocr_btn = None
+        self._ocr_image_path = None
+        self._ocr_result_text = None
+        self._ocr_running = False
+        self._content_view = None
         return self
 
     def showForSlot_nearPanel_(self, slot_data, picker_panel):
@@ -2062,6 +2162,14 @@ class QuickLookPreviewPanel(NSPanel):
         self._detected_lang = None
         self._target_lang = "en"
         self._translating = False
+        self._image_view = None
+        self._ocr_btn = None
+        self._ocr_image_path = None
+        self._ocr_result_text = None
+        self._ocr_running = False
+        self._content_view = None
+        self._ocr_swapped = False
+        self._ocr_status_label = None
         kind = slot_data.get("kind", "text")
         text = slot_data.get("text") or ""
         sensitive = slot_data.get("sensitive", False)
@@ -2132,17 +2240,50 @@ class QuickLookPreviewPanel(NSPanel):
                     scale = min(QL_IMAGE_MAX / max(iw, 1), QL_IMAGE_MAX / max(ih, 1), 1.0)
                     disp_w = max(80, int(iw * scale))
                     disp_h = max(80, int(ih * scale))
+                    ocr_on = bool(_settings_get("enable_ocr", True))
+                    ctrl_h = 28 if ocr_on else 0
+                    # Image sits above the control strip
                     iv = NSImageView.alloc().initWithFrame_(
-                        NSMakeRect(QL_PADDING, QL_PADDING, disp_w, disp_h)
+                        NSMakeRect(QL_PADDING, QL_PADDING + ctrl_h + (4 if ocr_on else 0), disp_w, disp_h)
                     )
                     iv.setImage_(img)
                     iv.setImageScaling_(3)  # NSImageScaleProportionallyUpOrDown
                     iv.setWantsLayer_(True)
+                    try:
+                        iv.setAlphaValue_(1.0)
+                    except Exception:
+                        pass
                     iv.layer().setCornerRadius_(6.0)
                     iv.layer().setMasksToBounds_(True)
                     content.addSubview_(iv)
-                    width = disp_w + 2 * QL_PADDING
-                    height = disp_h + 2 * QL_PADDING
+                    self._image_view = iv
+                    self._ocr_image_path = str(path)
+                    self._ocr_result_text = None
+                    width = max(disp_w, 160) + 2 * QL_PADDING
+                    height = disp_h + 2 * QL_PADDING + ctrl_h + (4 if ocr_on else 0)
+                    if ocr_on:
+                        btn_w, btn_h = 72, 22
+                        ocr_btn = NSButton.alloc().initWithFrame_(
+                            NSMakeRect(
+                                QL_PADDING + (disp_w - btn_w) / 2.0 if disp_w >= btn_w else QL_PADDING,
+                                QL_PADDING + 3,
+                                btn_w,
+                                btn_h,
+                            )
+                        )
+                        ocr_btn.setTitle_("OCR")
+                        ocr_btn.setTarget_(self)
+                        ocr_btn.setAction_("ocrClicked:")
+                        ocr_btn.setToolTip_("Extract text from this image (Tesseract)")
+                        ocr_btn.setImage_(None)
+                        ocr_btn.setImagePosition_(0)
+                        try:
+                            ocr_btn.setAlignment_(1)
+                        except Exception:
+                            pass
+                        self._style_glass_button(ocr_btn, primary=True, font_size=9.0)
+                        content.addSubview_(ocr_btn)
+                        self._ocr_btn = ocr_btn
                 else:
                     width, height = self._add_text_preview(content, "[Image unavailable]")
             else:
@@ -2261,6 +2402,7 @@ class QuickLookPreviewPanel(NSPanel):
                 width, height = self._add_text_preview(content, display, language=lang)
 
         content.setFrame_(NSMakeRect(0, 0, width, height))
+        self._content_view = content
         self.setContentView_(content)
         self.setContentSize_(NSMakeSize(width, height))
 
@@ -2964,15 +3106,281 @@ class QuickLookPreviewPanel(NSPanel):
             if self._replace_btn:
                 self._replace_btn.setTitle_("Failed")
 
+    def _show_ocr_status(self, message: str):
+        """Show a short error/status line under the OCR button (visible, not just tooltip)."""
+        content = getattr(self, "_content_view", None)
+        if content is None:
+            return
+        # Remove previous status label if any
+        old = getattr(self, "_ocr_status_label", None)
+        if old is not None:
+            try:
+                old.removeFromSuperview()
+            except Exception:
+                pass
+            self._ocr_status_label = None
+
+        frame = content.frame()
+        label = NSTextField.alloc().initWithFrame_(
+            NSMakeRect(QL_PADDING, 2, max(40, frame.size.width - 2 * QL_PADDING), 14)
+        )
+        label.setStringValue_(message[:80])
+        label.setBezeled_(False)
+        label.setDrawsBackground_(False)
+        label.setEditable_(False)
+        label.setSelectable_(False)
+        label.setFont_(NSFont.systemFontOfSize_weight_(9.0, 0.3))
+        label.setTextColor_(NSColor.colorWithCalibratedRed_green_blue_alpha_(1.0, 0.55, 0.45, 1.0))
+        label.setAlignment_(1)  # center
+        try:
+            label.setToolTip_(message)
+        except Exception:
+            pass
+        content.addSubview_(label)
+        self._ocr_status_label = label
+        # Nudge button up slightly if status is present
+        btn = getattr(self, "_ocr_btn", None)
+        if btn is not None:
+            try:
+                bf = btn.frame()
+                btn.setFrameOrigin_((bf.origin.x, max(bf.origin.y, 16)))
+            except Exception:
+                pass
+
+    def ocrClicked_(self, sender):
+        """Run Tesseract OCR on the current image and animate image → text."""
+        import sys
+        if getattr(self, "_ocr_running", False):
+            return
+        path = getattr(self, "_ocr_image_path", None)
+        if not path:
+            self._show_ocr_status("No image path")
+            return
+        self._ocr_running = True
+        btn = getattr(self, "_ocr_btn", None)
+        if btn is not None:
+            btn.setEnabled_(False)
+            btn.setTitle_("…")
+            self._style_glass_button(btn, primary=True, font_size=9.0)
+        # Clear prior status
+        old = getattr(self, "_ocr_status_label", None)
+        if old is not None:
+            try:
+                old.removeFromSuperview()
+            except Exception:
+                pass
+            self._ocr_status_label = None
+
+        print(f"[PasteDeck] OCR start path={path}", file=sys.stderr, flush=True)
+
+        def worker():
+            text, err = ocr_image_path(path)
+            print(
+                f"[PasteDeck] OCR done ok={bool(text)} err={err!r} chars={len(text) if text else 0}",
+                file=sys.stderr,
+                flush=True,
+            )
+
+            def update():
+                try:
+                    if getattr(self, "_ocr_image_path", None) != path:
+                        return
+                    if text:
+                        self._ocr_result_text = text
+                        self._animate_image_to_text(text)
+                    else:
+                        if btn is not None:
+                            btn.setTitle_("Retry")
+                            btn.setEnabled_(True)
+                            self._style_glass_button(btn, primary=True, font_size=9.0)
+                            try:
+                                btn.setToolTip_(err or "No text detected")
+                            except Exception:
+                                pass
+                        self._show_ocr_status(err or "No text detected")
+                finally:
+                    self._ocr_running = False
+
+            try:
+                from Foundation import NSOperationQueue
+                NSOperationQueue.mainQueue().addOperationWithBlock_(update)
+            except Exception:
+                update()
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _animate_image_to_text(self, ocr_text: str):
+        """Satisfying transition: fade + slight scale-down of the image, then
+        swap to a text preview (with Translate/Replace) and fade it in.
+        """
+        iv = getattr(self, "_image_view", None)
+        btn = getattr(self, "_ocr_btn", None)
+        content = getattr(self, "_content_view", None)
+        if content is None:
+            # Fallback: no animation
+            self._swap_image_to_text(ocr_text)
+            return
+
+        self._ocr_anim_generation = getattr(self, "_ocr_anim_generation", 0) + 1
+        gen = self._ocr_anim_generation
+
+        def do_swap():
+            if getattr(self, "_ocr_anim_generation", None) != gen:
+                return
+            self._swap_image_to_text(ocr_text)
+
+        # Fade out image + OCR button; optional slight scale on image layer
+        try:
+            targets = [v for v in (iv, btn) if v is not None]
+            for v in targets:
+                try:
+                    v.setWantsLayer_(True)
+                    v.setAlphaValue_(1.0)
+                except Exception:
+                    pass
+            if iv is not None:
+                try:
+                    layer = iv.layer()
+                    if layer is not None:
+                        # Subtle scale-down while fading (satisfying “dissolve into text”)
+                        from Quartz import CATransform3DMakeScale
+                        layer.setTransform_(CATransform3DMakeScale(0.96, 0.96, 1.0))
+                except Exception:
+                    pass
+
+            from AppKit import NSAnimationContext
+            NSAnimationContext.beginGrouping()
+            ctx = NSAnimationContext.currentContext()
+            ctx.setDuration_(0.22)
+            try:
+                ctx.setAllowsImplicitAnimation_(True)
+            except Exception:
+                pass
+            try:
+                ctx.setCompletionHandler_(do_swap)
+            except Exception:
+                pass
+            for v in targets:
+                try:
+                    v.animator().setAlphaValue_(0.0)
+                except Exception:
+                    try:
+                        v.setAlphaValue_(0.0)
+                    except Exception:
+                        pass
+            NSAnimationContext.endGrouping()
+
+            # Safety net if completion handler is dropped by PyObjC
+            try:
+                self.performSelector_withObject_afterDelay_(
+                    "ocrAnimSafety:", None, 0.32
+                )
+            except Exception:
+                try:
+                    from Foundation import NSTimer
+                    NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
+                        0.32, self, "ocrAnimSafety:", None, False
+                    )
+                except Exception:
+                    do_swap()
+            self._ocr_anim_do_swap = do_swap
+        except Exception:
+            do_swap()
+
+    def ocrAnimSafety_(self, _obj=None):
+        """Safety completion for the OCR image→text transition."""
+        cb = getattr(self, "_ocr_anim_do_swap", None)
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                pass
+            self._ocr_anim_do_swap = None
+
+    def _swap_image_to_text(self, ocr_text: str):
+        """Replace image content with a text preview of the OCR result and fade in."""
+        # Idempotent: only run once per generation
+        if getattr(self, "_ocr_swapped", False):
+            return
+        self._ocr_swapped = True
+        self._ocr_anim_do_swap = None
+
+        content = getattr(self, "_content_view", None)
+        if content is None:
+            return
+
+        # Clear image / OCR button
+        try:
+            for sub in list(content.subviews()):
+                try:
+                    sub.removeFromSuperview()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        self._image_view = None
+        self._ocr_btn = None
+        self._ocr_running = False
+
+        # Build text preview (includes Translate / Replace)
+        width, height = self._add_text_preview(content, ocr_text)
+        # Treat OCR text as the “original” so Replace can write it into the slot
+        self._original_text = ocr_text
+        self._translated_text = ocr_text  # allow Replace immediately
+        if getattr(self, "_replace_btn", None):
+            try:
+                self._replace_btn.setEnabled_(True)
+                self._replace_btn.setTitle_("Replace")
+                self._style_glass_button(self._replace_btn, primary=False, font_size=9.0)
+                self._replace_btn.setToolTip_("Replace slot with OCR text (and copy to pasteboard)")
+            except Exception:
+                pass
+
+        content.setFrame_(NSMakeRect(0, 0, width, height))
+        self.setContentSize_(NSMakeSize(width, height))
+
+        # Fade in the new text area
+        target = (
+            getattr(self, "_text_wrap", None)
+            or getattr(self, "_scroll_view", None)
+            or getattr(self, "_text_view", None)
+        )
+        if target is not None:
+            try:
+                target.setWantsLayer_(True)
+                target.setAlphaValue_(0.0)
+            except Exception:
+                pass
+            try:
+                from AppKit import NSAnimationContext
+                NSAnimationContext.beginGrouping()
+                ctx = NSAnimationContext.currentContext()
+                ctx.setDuration_(0.34)
+                try:
+                    ctx.setAllowsImplicitAnimation_(True)
+                except Exception:
+                    pass
+                target.animator().setAlphaValue_(1.0)
+                NSAnimationContext.endGrouping()
+            except Exception:
+                try:
+                    target.setAlphaValue_(1.0)
+                except Exception:
+                    pass
+        # _ocr_swapped stays True until hide / next showForSlot
+
     def hide_preview(self):
         self._over_preview = False
         self.orderOut_(None)
-        # Invalidate any in-flight translate cross-fade
+        # Invalidate any in-flight translate / OCR cross-fade
         self._anim_generation = getattr(self, "_anim_generation", 0) + 1
         self._anim_pending_text = None
         self._anim_fade_in = None
         self._anim_target = None
         self._anim_tv = None
+        self._ocr_anim_generation = getattr(self, "_ocr_anim_generation", 0) + 1
+        self._ocr_anim_do_swap = None
         self._slot = None
         self._picker = None
         self._text_view = None
@@ -2987,6 +3395,14 @@ class QuickLookPreviewPanel(NSPanel):
         self._detected_lang = None
         self._target_lang = "en"
         self._translating = False
+        self._image_view = None
+        self._ocr_btn = None
+        self._ocr_image_path = None
+        self._ocr_result_text = None
+        self._ocr_running = False
+        self._content_view = None
+        self._ocr_swapped = False
+        self._ocr_status_label = None
 
 
 class PickerEventMonitor:
@@ -3771,6 +4187,7 @@ class SettingsWindowController(NSObject):
         self._detect_btn = None
         self._file_preview_btn = None
         self._translate_btn = None
+        self._ocr_btn = None
         self._slot_nums_btn = None
         self._sound_btn = None
         self._trunc_popup = None
@@ -3782,7 +4199,7 @@ class SettingsWindowController(NSObject):
             NSApplication.sharedApplication().activateIgnoringOtherApps_(True)
             return
 
-        width, height = 440, 520
+        width, height = 440, 560
         style = (
             NSWindowStyleMaskTitled
             | NSWindowStyleMaskClosable
@@ -3926,6 +4343,13 @@ class SettingsWindowController(NSObject):
             "noopChanged:",
         )
         y -= 28
+        self._ocr_btn = _switch(
+            "Enable OCR on image Quick Look (Tesseract)",
+            y,
+            settings.get("enable_ocr", True),
+            "noopChanged:",
+        )
+        y -= 28
         self._slot_nums_btn = _switch(
             "Show slot numbers in picker",
             y,
@@ -4007,6 +4431,7 @@ class SettingsWindowController(NSObject):
         detect = bool(self._detect_btn.state())
         file_prev = bool(self._file_preview_btn.state())
         translate = bool(self._translate_btn.state())
+        ocr = bool(self._ocr_btn.state()) if self._ocr_btn is not None else True
         slot_nums = bool(self._slot_nums_btn.state())
         sound = bool(self._sound_btn.state())
         code_bytes = int(self._trunc_popup.selectedItem().tag())
@@ -4017,6 +4442,7 @@ class SettingsWindowController(NSObject):
         s["detect_sensitive"] = detect
         s["enable_file_previews"] = file_prev
         s["enable_translate"] = translate
+        s["enable_ocr"] = ocr
         s["show_slot_numbers"] = slot_nums
         s["sound_on_paste"] = sound
         s["code_preview_max_bytes"] = code_bytes
